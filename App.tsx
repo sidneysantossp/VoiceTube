@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
+import { supabase } from './lib/supabase';
+import Auth from './components/Auth';
 import { 
   Play, 
   Pause, 
@@ -19,7 +21,8 @@ import {
   Plus,
   GripVertical,
   X,
-  Scissors
+  Scissors,
+  LogOut
 } from 'lucide-react';
 import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip } from './types';
 import { createWavBlob, base64ToArrayBuffer, processAudioBlob } from './utils/audioUtils';
@@ -44,6 +47,34 @@ const STORAGE_KEYS = {
 };
 
 export default function App() {
+  // --- AUTH STATE ---
+  const [session, setSession] = useState<any>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
+
+  useEffect(() => {
+    // Check active session
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        setSession(session);
+        setLoadingSession(false);
+      })
+      .catch((err) => {
+        console.warn("Supabase session check failed:", err);
+        setLoadingSession(false);
+      });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // --- APP STATE ---
+
   // Navigation State
   const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor'>('tts');
 
@@ -288,6 +319,10 @@ export default function App() {
       if(confirm("Tem certeza que deseja excluir esta edição?")) {
         setMergedHistory(prev => prev.filter(c => c.id !== id));
       }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
   };
 
   // Handlers
@@ -563,6 +598,21 @@ export default function App() {
 
   const fullText = getFullText();
 
+  // LOADING SCREEN
+  if (loadingSession) {
+    return (
+      <div className="h-screen bg-slate-950 flex items-center justify-center text-white">
+        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  // AUTH SCREEN
+  if (!session) {
+    return <Auth />;
+  }
+
+  // APP SCREEN
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       
@@ -614,14 +664,22 @@ export default function App() {
           </nav>
         </div>
         
-        <div className="mt-auto p-4 border-t border-slate-800">
+        <div className="mt-auto p-4 border-t border-slate-800 space-y-3">
            <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
              <div className="flex items-center gap-2 mb-2">
                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-               <span className="text-xs font-medium text-slate-300">Sistema Operacional</span>
+               <span className="text-xs font-medium text-slate-300 truncate w-32">{session.user.email}</span>
              </div>
              <p className="text-[10px] text-slate-500">v1.5.0 • Editor Suite</p>
            </div>
+           
+           <button 
+             onClick={handleLogout}
+             className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 py-2 rounded-lg transition-colors text-xs font-bold uppercase tracking-wide"
+           >
+             <LogOut className="w-4 h-4" />
+             Sair
+           </button>
         </div>
       </aside>
 
