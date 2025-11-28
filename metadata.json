@@ -1,0 +1,7 @@
+{
+  "name": "Gemini Voice Studio",
+  "description": "Professional Text-to-Speech platform using Gemini 2.5.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
