@@ -30,8 +30,6 @@ import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
 
-const API_KEY = process.env.API_KEY || '';
-
 const DEFAULT_CONFIG = {
   temperature: 1.0,
   topP: 0.95,
@@ -329,15 +327,15 @@ export default function App() {
   const handleGenerate = async () => {
     const fullText = getFullText();
     if (!fullText.trim()) return;
-    if (!API_KEY) {
-      alert("API Key is missing!");
+    if (!process.env.API_KEY) {
+      alert("API Key não encontrada! Configure a variável API_KEY no seu provedor.");
       return;
     }
 
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       let response;
 
       // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
@@ -461,7 +459,10 @@ export default function App() {
   const handlePreview = async (e: React.MouseEvent, voice: VoiceOption) => {
     e.stopPropagation(); // Prevent selecting the voice when clicking preview
 
-    if (!API_KEY) return;
+    if (!process.env.API_KEY) {
+         alert("API Key não encontrada.");
+         return;
+    }
 
     // Toggle off if already playing this voice
     if (previewVoiceId === voice.id && !isPreviewLoading) {
@@ -484,7 +485,7 @@ export default function App() {
     setIsPreviewLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       // Portuguese preview text
       const previewText = `Olá, eu sou a voz ${voice.name}. Testando o áudio em português.`;
       
