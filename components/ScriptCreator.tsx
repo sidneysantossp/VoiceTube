@@ -14,7 +14,8 @@ import {
   BrainCircuit,
   Sparkles,
   ChevronRight,
-  Target
+  Target,
+  Clock // Added Clock icon
 } from 'lucide-react';
 import { ScriptBlock } from '../types';
 
@@ -53,6 +54,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
   const [genre, setGenre] = useState('YouTube Video');
   const [tone, setTone] = useState('Informative');
   const [targetAudience, setTargetAudience] = useState('General Audience');
+  const [duration, setDuration] = useState('5 minutes'); // New Duration State
   const [temperature, setTemperature] = useState(0.7);
 
   // Step 2: Architecture
@@ -117,6 +119,9 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
         Gênero: ${genre}
         Tom: ${tone}
         Público: ${targetAudience}
+        Duração Alvo: ${duration}
+
+        Importante: Planeje a quantidade de cenas/beats para preencher aproximadamente ${duration} de conteúdo falado.
 
         Gere um JSON com:
         1. Um título cativante (MÁXIMO 100 caracteres).
@@ -206,6 +211,9 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
             Use a estrutura aprovada abaixo para escrever o roteiro completo.
             Separe o roteiro em blocos lógicos de texto (parágrafos ou falas).
             Mantenha o tom ${tone}.
+            Duração Alvo do Roteiro: ${duration}.
+            
+            Instrução de Volume: Escreva conteúdo suficiente para cobrir ${duration} de fala em velocidade normal. Seja detalhado e expansivo para atingir esse tempo.
             
             ESTRUTURA APROVADA:
             ${structureContext}
@@ -218,7 +226,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
             model: "gemini-2.5-flash",
             contents: [{ parts: [{ text: prompt }] }],
             config: {
-                systemInstruction: "Você é um roteirista criativo. Responda APENAS com JSON válido. Escreva diálogos naturais. NÃO gere listas de hashtags.",
+                systemInstruction: "Você é um roteirista criativo. Responda APENAS com JSON válido. Escreva diálogos naturais. NÃO gere listas de hashtags. NÃO repita títulos infinitamente.",
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -377,6 +385,28 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                             </div>
                         </div>
 
+                        {/* New Duration Selector */}
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-indigo-500" />
+                                Duração Estimada
+                            </label>
+                            <select 
+                                value={duration}
+                                onChange={(e) => setDuration(e.target.value)}
+                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                                <option value="2 minutes">~2 Minutos (Curto)</option>
+                                <option value="5 minutes">~5 Minutos (Padrão)</option>
+                                <option value="10 minutes">~10 Minutos (Detalhado)</option>
+                                <option value="20 minutes">~20 Minutos (Aprofundado)</option>
+                                <option value="40 minutes">~40 Minutos (Documentário)</option>
+                            </select>
+                            <p className="text-[10px] text-slate-400 mt-1 pl-1">
+                                A IA ajustará a quantidade de cenas e o volume de texto baseada nesta escolha.
+                            </p>
+                        </div>
+
                         <div className="grid grid-cols-2 gap-6">
                              <div>
                                 <label className="block text-sm font-bold text-slate-700 mb-2">Público Alvo</label>
@@ -452,6 +482,9 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                         <div className="bg-slate-50 p-6 border-b border-slate-200">
                              <h3 className="text-xl font-bold text-slate-800">{structure.title}</h3>
                              <p className="text-slate-600 italic mt-2">"{structure.logline}"</p>
+                             <span className="inline-block mt-2 text-[10px] font-bold bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded border border-indigo-200">
+                                 Alvo: {duration}
+                             </span>
                         </div>
                         
                         <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8">
