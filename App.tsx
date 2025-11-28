@@ -29,16 +29,22 @@ import {
   KeyRound,
   User,
   LayoutDashboard,
-  Menu
+  Menu,
+  Info,
+  Cpu,
+  LayoutTemplate
 } from 'lucide-react';
-import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile } from './types';
+import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile, UserIntegrations } from './types';
 import { createWavBlob, base64ToArrayBuffer, processAudioBlob, blobToBase64 } from './utils/audioUtils';
+import { generateContentWithRetry } from './utils/aiService'; // Import the new service
 import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
 import ScriptCreator from './components/ScriptCreator';
 import AdminDashboard from './components/AdminDashboard';
-import UserProfileModal from './components/UserProfileModal';
+import UserProfilePage from './components/UserProfilePage';
+import SettingsPage from './components/SettingsPage';
+import TitleCreator from './components/TitleCreator';
 
 // --- ENVIRONMENT VARIABLES FIX ---
 // Safely access environment variables
@@ -51,11 +57,22 @@ const DEFAULT_CONFIG = {
   speed: 1.0
 };
 
+const DEFAULT_INTEGRATIONS: UserIntegrations = {
+  gemini_key: '',
+  openai_key: '',
+  anthropic_key: '',
+  xai_key: '',
+  perplexity_key: '',
+  preferred_script_model: 'gemini',
+  preferred_image_model: 'gemini'
+};
+
 const STORAGE_KEYS = {
   CONFIG: 'gemini_voice_model_config',
   HISTORY: 'gemini_voice_history_clips',
   MERGED: 'gemini_voice_merged_clips',
-  LOCAL_API_KEY: 'gemini_voice_user_api_key'
+  LOCAL_API_KEY: 'gemini_voice_user_api_key', // Legacy single key
+  INTEGRATIONS: 'voice_tube_integrations_v1' // New multi-key storage
 };
 
 export default function App() {
@@ -65,10 +82,29 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
   // --- API KEY STATE ---
-  // Priority: 1. Global DB Config (Admin set), 2. LocalStorage (User set), 3. Env Var
+  // Legacy single API key support is mapped to integrations.gemini_key
   const [apiKey, setApiKey] = useState<string>('');
   const [isGlobalKey, setIsGlobalKey] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+
+  // --- NEW: INTEGRATIONS STATE ---
+  const [integrations, setIntegrations] = useState<UserIntegrations>(() => {
+      try {
+          const saved = localStorage.getItem(STORAGE_KEYS.INTEGRATIONS);
+          return saved ? { ...DEFAULT_INTEGRATIONS, ...JSON.parse(saved) } : DEFAULT_INTEGRATIONS;
+      } catch (e) {
+          return DEFAULT_INTEGRATIONS;
+      }
+  });
+
+  // Sync Integrations to LocalStorage
+  useEffect(() => {
+      localStorage.setItem(STORAGE_KEYS.INTEGRATIONS, JSON.stringify(integrations));
+      // Sync legacy apiKey state for backward compatibility with older components
+      if (integrations.gemini_key && !isGlobalKey) {
+          setApiKey(integrations.gemini_key);
+      }
+  }, [integrations, isGlobalKey]);
 
   useEffect(() => {
     // Check if we are handling a password reset or email confirmation link
@@ -130,6 +166,7 @@ export default function App() {
                 id: uid,
                 email: email,
                 full_name: profile?.full_name || 'Admin Principal',
+                avatar_url: profile?.avatar_url,
                 role: 'admin', // Force admin
                 created_at: profile?.created_at || new Date().toISOString()
              });
@@ -157,42 +194,40 @@ export default function App() {
             .single();
 
           if (settings && settings.value) {
+              // If Global Key exists, it overrides local user keys for Gemini
               setApiKey(settings.value);
               setIsGlobalKey(true);
-              // Return to stop further key lookups
+              // We also update integrations state to reflect this, but don't save to LS to avoid overwriting user's private key
+              setIntegrations(prev => ({ ...prev, gemini_key: settings.value }));
               return; 
           }
       } catch (e) {
           console.warn("Error fetching profile/settings:", e);
       }
 
-      // 3. Fallback: LocalStorage (if global not found)
-      const localKey = localStorage.getItem(STORAGE_KEYS.LOCAL_API_KEY);
-      if (localKey) {
-          setApiKey(localKey);
-          return;
-      }
-
-      // 4. Fallback: Env Var
-      if (env.VITE_API_KEY) {
-          setApiKey(env.VITE_API_KEY);
+      // 3. Fallback: LocalStorage (Managed by integrations state now)
+      // Check legacy key first
+      const legacyKey = localStorage.getItem(STORAGE_KEYS.LOCAL_API_KEY);
+      if (legacyKey && !integrations.gemini_key) {
+          setIntegrations(prev => ({ ...prev, gemini_key: legacyKey }));
       }
   };
 
-  const updateLocalApiKey = (newKey: string) => {
-      setApiKey(newKey);
-      localStorage.setItem(STORAGE_KEYS.LOCAL_API_KEY, newKey);
-      setShowApiKeyModal(false);
+  const updateIntegrations = (newSettings: UserIntegrations) => {
+      setIntegrations(newSettings);
+      if (!isGlobalKey) {
+          setApiKey(newSettings.gemini_key);
+      }
   };
 
   // --- APP STATE ---
 
   // Navigation State
-  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'admin'>('tts');
+  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'title-creator' | 'admin' | 'profile' | 'settings'>('tts');
 
   // User Menu State
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [showProfileModal, setShowProfileModal] = useState(false);
+  // Modal deprecated, using page now
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Auto-refresh profile on menu open to catch DB changes
@@ -536,15 +571,15 @@ export default function App() {
     if (!fullText.trim()) return;
     
     if (!apiKey) {
-      alert("API Key não encontrada! Por favor, clique no ícone de chave no topo para configurar.");
-      setShowApiKeyModal(true);
+      alert("API Key não encontrada! Por favor, configure sua chave no menu de Configurações.");
+      setCurrentView('settings');
       return;
     }
 
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey });
+      // Use the new Retry Service
       let response;
 
       // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
@@ -563,7 +598,8 @@ export default function App() {
 
          // USE MULTIMODAL MODEL to mimic the audio style
          // Model: gemini-2.5-flash which supports audio-in and audio-out
-         response = await ai.models.generateContent({
+         response = await generateContentWithRetry({
+             apiKey,
              model: "gemini-2.5-flash", 
              contents: [
                  {
@@ -589,7 +625,8 @@ export default function App() {
          });
       } else {
          // USE STANDARD TTS MODEL
-         response = await ai.models.generateContent({
+         response = await generateContentWithRetry({
+            apiKey,
             model: "gemini-2.5-flash-preview-tts",
             contents: [{ parts: [{ text: fullText }] }],
             config: {
@@ -624,9 +661,13 @@ export default function App() {
 
         setHistory(prev => [newClip, ...prev]);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Generation failed", error);
-      alert("Falha ao gerar o áudio. Verifique sua API Key e conexão.");
+      if (error.message?.includes('429')) {
+          alert("Limite de uso do plano gratuito atingido. Aguarde alguns instantes e tente novamente.");
+      } else {
+          alert("Falha ao gerar o áudio. Verifique sua API Key e conexão.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -682,7 +723,7 @@ export default function App() {
 
     if (!apiKey) {
          alert("API Key não encontrada! Configure.");
-         setShowApiKeyModal(true);
+         setCurrentView('settings');
          return;
     }
 
@@ -707,8 +748,7 @@ export default function App() {
     setIsPreviewLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey });
-      // Portuguese preview text
+      // Use the new Retry Service
       const previewText = `Olá, eu sou a voz ${voice.name}. Testando o áudio em português.`;
       
       let response;
@@ -726,7 +766,8 @@ export default function App() {
            if (!audioDataBase64) throw new Error("Audio source missing");
 
            // Custom Voice Preview Logic
-           response = await ai.models.generateContent({
+           response = await generateContentWithRetry({
+             apiKey,
              model: "gemini-2.5-flash",
              contents: [
                  {
@@ -738,7 +779,7 @@ export default function App() {
                             }
                         },
                         {
-                            text: `Say the following text, mimicking the audio style provided: "${previewText}"`
+                            text: `Say the following text, mimicking the speaker in the audio provided: "${previewText}"`
                         }
                      ]
                  }
@@ -752,7 +793,8 @@ export default function App() {
            });
       } else {
            // Standard Voice Preview Logic
-           response = await ai.models.generateContent({
+           response = await generateContentWithRetry({
+            apiKey,
             model: "gemini-2.5-flash-preview-tts",
             contents: [{ parts: [{ text: previewText }] }],
             config: {
@@ -885,6 +927,17 @@ export default function App() {
               Criador de Roteiro
             </button>
             <button 
+              onClick={() => setCurrentView('title-creator')}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                currentView === 'title-creator' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+              }`}
+            >
+              <LayoutTemplate className="w-5 h-5" />
+              Criador de Títulos
+            </button>
+            <button 
               onClick={() => setCurrentView('cloning')}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
                 currentView === 'cloning' 
@@ -907,11 +960,39 @@ export default function App() {
               Edição de Áudio
             </button>
           </nav>
+
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2 mt-6">Sistema</p>
+          <nav className="space-y-1">
+             <button 
+                onClick={() => setCurrentView('settings')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                  currentView === 'settings' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <Cpu className="w-5 h-5" />
+                Configurações
+              </button>
+          </nav>
         </div>
         
+        {/* FREE BETA BANNER IN SIDEBAR */}
+        <div className="px-4 pb-4">
+            <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-1">
+                    <Info className="w-4 h-4 text-indigo-400" />
+                    <span className="text-xs font-bold text-indigo-300 uppercase">Beta Gratuito</span>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-tight">
+                    Plataforma em testes públicos. Recursos gratuitos limitados pela API do Google.
+                </p>
+            </div>
+        </div>
+
         <div className="p-4 border-t border-slate-800">
            <div className="text-[10px] text-slate-600 text-center">
-                &copy; 2024 Voice Tube - v1.6.0
+                &copy; 2024 Voice Tube - v1.8.0
            </div>
         </div>
       </aside>
@@ -926,13 +1007,16 @@ export default function App() {
             {currentView === 'cloning' && 'Clonagem de Voz'}
             {currentView === 'editor' && 'Edição de Áudio'}
             {currentView === 'script-creator' && 'Criador de Roteiro (AI)'}
+            {currentView === 'title-creator' && 'Criador de Títulos (SEO)'}
             {currentView === 'admin' && 'Admin Dashboard'}
+            {currentView === 'profile' && 'Meu Perfil'}
+            {currentView === 'settings' && 'Configurações de IA'}
           </h1>
 
           <div className="flex items-center gap-4">
-             {/* API Key Manager */}
+             {/* Key Status Indicator */}
              <button 
-                onClick={() => setShowApiKeyModal(true)}
+                onClick={() => setCurrentView('settings')}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
                     isGlobalKey 
                     ? 'bg-purple-100 text-purple-700 border-purple-200 cursor-default'
@@ -940,10 +1024,10 @@ export default function App() {
                         ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
                         : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100 animate-pulse'
                 }`}
-                title={isGlobalKey ? "Chave Global do Sistema Ativa" : "Configurar sua API Key"}
+                title={isGlobalKey ? "Chave Global do Sistema Ativa" : "Configurar Integrações"}
              >
                 <KeyRound className="w-3.5 h-3.5" />
-                {isGlobalKey ? 'Chave Global' : apiKey ? 'Chave Ativa' : 'Configurar Key'}
+                {isGlobalKey ? 'Chave Global' : apiKey ? 'Chaves Ativas' : 'Sem Chave'}
              </button>
 
              <div className="h-6 w-px bg-slate-200 mx-1"></div>
@@ -962,9 +1046,16 @@ export default function App() {
                             {userProfile?.role || 'User'}
                         </p>
                     </div>
-                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 overflow-hidden">
-                        <User className="w-5 h-5" />
+                    
+                    {/* AVATAR: Check Supabase URL first, then fallback */}
+                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 overflow-hidden relative">
+                        {userProfile?.avatar_url ? (
+                            <img src={userProfile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+                        ) : (
+                            <User className="w-5 h-5" />
+                        )}
                     </div>
+                    
                     <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
 
@@ -981,13 +1072,24 @@ export default function App() {
                         <div className="py-1">
                             <button 
                                 onClick={() => {
-                                    setShowProfileModal(true);
+                                    setCurrentView('profile');
                                     setIsUserMenuOpen(false);
                                 }}
                                 className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
                             >
                                 <User className="w-4 h-4" />
                                 Meu Perfil
+                            </button>
+
+                            <button 
+                                onClick={() => {
+                                    setCurrentView('settings');
+                                    setIsUserMenuOpen(false);
+                                }}
+                                className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
+                            >
+                                <Cpu className="w-4 h-4" />
+                                Configurações de IA
                             </button>
                             
                             {/* Conditional Admin Link */}
@@ -1025,6 +1127,13 @@ export default function App() {
           
           {currentView === 'admin' ? (
               <AdminDashboard />
+          ) : currentView === 'settings' ? (
+              <SettingsPage 
+                integrations={integrations}
+                onUpdateIntegrations={updateIntegrations}
+              />
+          ) : currentView === 'title-creator' ? (
+              <TitleCreator apiKey={apiKey} integrations={integrations} />
           ) : currentView === 'editor' ? (
               <AudioEditor 
                 sourceClips={history}
@@ -1037,7 +1146,17 @@ export default function App() {
                 <VoiceCloning onSaveVoice={handleSaveVoice} apiKey={apiKey} />
              </div>
           ) : currentView === 'script-creator' ? (
-             <ScriptCreator onExportScript={handleImportScript} apiKey={apiKey} />
+             <ScriptCreator 
+                onExportScript={handleImportScript} 
+                apiKey={apiKey} 
+                integrations={integrations}
+             />
+          ) : currentView === 'profile' ? (
+             <UserProfilePage 
+                user={session.user} 
+                profile={userProfile} 
+                onProfileUpdate={() => fetchUserProfile(session)} 
+             />
           ) : (
              <div className="p-6 max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-12 gap-8 pb-10">
             
@@ -1507,70 +1626,6 @@ export default function App() {
         </main>
       </div>
       
-      {/* API Key Modal */}
-      {showApiKeyModal && !isGlobalKey && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in">
-              <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
-                  <button 
-                    onClick={() => setShowApiKeyModal(false)}
-                    className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
-                  >
-                      <X className="w-5 h-5" />
-                  </button>
-                  
-                  <div className="flex items-center gap-3 mb-4">
-                      <div className="bg-indigo-100 p-2 rounded-lg">
-                          <KeyRound className="w-6 h-6 text-indigo-600" />
-                      </div>
-                      <h2 className="text-xl font-bold text-slate-800">Configurar API Key</h2>
-                  </div>
-                  
-                  <p className="text-slate-500 text-sm mb-4">
-                      Para usar a inteligência artificial, você precisa de uma chave API do Google Gemini.
-                      Esta chave será salva apenas no seu navegador.
-                  </p>
-
-                  <input 
-                    type="text" 
-                    placeholder="Cole sua API Key aqui (AIza...)"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    className="w-full p-3 border border-slate-300 rounded-xl mb-4 focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
-                  />
-
-                  <div className="flex justify-end gap-2">
-                      <button 
-                        onClick={() => setShowApiKeyModal(false)}
-                        className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg font-medium"
-                      >
-                          Cancelar
-                      </button>
-                      <button 
-                        onClick={() => updateLocalApiKey(apiKey)}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold"
-                      >
-                          Salvar Chave
-                      </button>
-                  </div>
-                  
-                  <div className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400 text-center">
-                      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">
-                          Obter chave no Google AI Studio
-                      </a>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* User Profile Modal */}
-      {showProfileModal && (
-        <UserProfileModal 
-            user={session.user} 
-            profile={userProfile} 
-            onClose={() => setShowProfileModal(false)} 
-        />
-      )}
-
       {/* Hidden Audio Element for Playback */}
       <audio 
         ref={audioRef} 

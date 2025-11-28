@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
+import { UserIntegrations } from '../types';
 import { 
   BookOpen, 
   Wand2, 
@@ -29,6 +30,7 @@ import { ScriptBlock } from '../types';
 interface ScriptCreatorProps {
   onExportScript: (blocks: ScriptBlock[]) => void;
   apiKey: string;
+  integrations?: UserIntegrations; // Added support for user settings
 }
 
 // Data Structures for the "Architect" Phase
@@ -78,7 +80,7 @@ const AUDIENCE_SUGGESTIONS = [
   "Entusiastas de Fitness"
 ];
 
-export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorProps) {
+export default function ScriptCreator({ onExportScript, apiKey, integrations }: ScriptCreatorProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
@@ -105,6 +107,20 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
   // Step 3: Final Script
   const [generatedBlocks, setGeneratedBlocks] = useState<ScriptBlock[]>([]);
 
+  // Determine active provider based on settings
+  const getActiveProvider = () => {
+      // Default to Gemini if no integration preferences provided
+      const pref = integrations?.preferred_script_model || 'gemini';
+      
+      // Fallback: If preference is OpenAI but no key, use Gemini
+      if (pref === 'openai' && !integrations?.openai_key) return 'gemini';
+      if (pref === 'claude' && !integrations?.anthropic_key) return 'gemini';
+      
+      return pref;
+  };
+
+  const activeProvider = getActiveProvider();
+
   // Close dropdowns when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -122,13 +138,9 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
   const cleanAndParseJSON = (text: string) => {
       let cleaned = text;
       
-      // 1. Regex Strategy: Try to extract a valid JSON object pattern { ... }
-      // This helps when the AI puts text before or after the JSON
       try {
           const jsonMatch = text.match(/(\{[\s\S]*\})/); 
           if (jsonMatch) {
-              // Further clean: if the match ends with garbage, try to find the last closing bracket that balances
-              // A simple approach is finding the last '}'
               const potentialJson = jsonMatch[0];
               const lastBracketIndex = potentialJson.lastIndexOf('}');
               if (lastBracketIndex !== -1) {
@@ -142,7 +154,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
           
           const parsed = JSON.parse(cleaned);
           
-          // 3. Post-parsing Validation: Truncate runaway strings
+          // Post-parsing Validation
           if (parsed.title && typeof parsed.title === 'string' && parsed.title.length > 200) {
               parsed.title = parsed.title.substring(0, 197) + '...';
           }
@@ -153,7 +165,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
           return parsed;
       } catch (e) {
           console.error("JSON Parse Error. Raw Text:", text);
-          throw new Error("A IA gerou uma resposta inválida ou incompleta. Tente simplificar.");
+          throw new Error("A IA gerou uma resposta inválida. Tente simplificar.");
       }
   };
 
@@ -172,14 +184,68 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
       setStructure({ ...structure, characters: newCharacters });
   };
 
+  // --- API ABSTRACTION LAYER ---
+  const callAI = async (systemPrompt: string, userPrompt: string, outputTokens: number, temp: number): Promise<string> => {
+      
+      if (activeProvider === 'openai' && integrations?.openai_key) {
+          // OPENAI FETCH CALL
+          const res = await fetch('https://api.openai.com/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${integrations.openai_key}`
+              },
+              body: JSON.stringify({
+                  model: 'gpt-4o', // Or gpt-4-turbo
+                  messages: [
+                      { role: 'system', content: systemPrompt },
+                      { role: 'user', content: userPrompt }
+                  ],
+                  max_tokens: outputTokens,
+                  temperature: temp,
+                  response_format: { type: "json_object" } // Force JSON mode
+              })
+          });
+
+          if (!res.ok) {
+              const err = await res.json();
+              throw new Error(`OpenAI Error: ${err.error?.message || 'Unknown error'}`);
+          }
+
+          const data = await res.json();
+          return data.choices[0].message.content;
+
+      } else {
+          // GEMINI SDK CALL (Default)
+          const ai = new GoogleGenAI({ apiKey: apiKey });
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{ parts: [{ text: userPrompt }] }],
+            config: {
+                systemInstruction: systemPrompt,
+                responseMimeType: "application/json",
+                temperature: temp,
+                maxOutputTokens: outputTokens
+            }
+          });
+          
+          return response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
+  };
+
   // --- AGENT 1: THE ARCHITECT ---
   const handleGenerateStructure = async () => {
     if (!premise.trim()) {
         setError("Por favor, descreva sua ideia.");
         return;
     }
-    if (!apiKey) {
-        setError("API Key não configurada. Configure no menu superior.");
+    // Validation based on provider
+    if (activeProvider === 'gemini' && !apiKey) {
+        setError("API Key do Gemini não configurada.");
+        return;
+    }
+    if (activeProvider === 'openai' && !integrations?.openai_key) {
+        setError("API Key da OpenAI não configurada.");
         return;
     }
 
@@ -187,11 +253,9 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey });
+      const systemInstruction = "Você é um especialista em estruturação de histórias (Story Architect). Responda APENAS com JSON válido. PROIBIDO USAR HASHTAGS ou listas repetitivas.";
       
       const prompt = `
-        Atue como um Arquiteto de Histórias Profissional (Story Architect).
-        
         Analise a seguinte premissa e crie a estrutura narrativa.
         Premissa: "${premise}"
         Gênero: ${genre}
@@ -202,73 +266,37 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
         Importante: Planeje a quantidade de cenas/beats para preencher aproximadamente ${duration} de conteúdo falado.
         
         REGRAS RÍGIDAS DE SAÍDA:
-        1. NÃO use hashtags (#) em nenhum lugar.
-        2. NÃO crie listas de palavras-chave no título.
-        3. O título deve ser uma frase única e coerente (Max 100 caracteres).
-        4. Responda APENAS com o JSON.
+        1. NÃO use hashtags (#).
+        2. O título deve ser uma frase única e coerente.
+        3. Responda APENAS com o JSON.
 
-        Gere um JSON com:
-        1. Um título cativante.
-        2. Uma Logline (resumo de 1 frase).
-        3. Lista de Personagens.
-        4. Uma estrutura (Outline) dividida em batidas (Beats/Cenas).
+        Estrutura do JSON Esperada:
+        {
+            "title": "Titulo",
+            "logline": "Resumo",
+            "characters": [{"name": "", "role": "", "traits": ""}],
+            "outline": [{"act": "", "title": "", "description": ""}]
+        }
       `;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: [{ parts: [{ text: prompt }] }],
-        config: {
-            systemInstruction: "Você é um especialista em estruturação. Responda APENAS com JSON válido. PROIBIDO USAR HASHTAGS.",
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    title: { type: Type.STRING },
-                    logline: { type: Type.STRING },
-                    characters: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                name: { type: Type.STRING },
-                                role: { type: Type.STRING },
-                                traits: { type: Type.STRING }
-                            },
-                            required: ["name", "role"]
-                        }
-                    },
-                    outline: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                act: { type: Type.STRING, description: "Ex: Intro, Desenvolvimento, Clímax" },
-                                title: { type: Type.STRING },
-                                description: { type: Type.STRING }
-                            },
-                            required: ["act", "title", "description"]
-                        }
-                    }
-                },
-                required: ["title", "logline", "outline"]
-            },
-            temperature: 0.4, 
-            maxOutputTokens: 4096 
-        }
-      });
-
-      const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
+      const jsonText = await callAI(systemInstruction, prompt, 4096, 0.4);
+      
       if (jsonText) {
           const parsed = cleanAndParseJSON(jsonText) as StoryStructure;
-          setStructure(parsed);
-          setStep(2);
+          // Validate structure keys roughly
+          if (parsed.title && parsed.outline) {
+              setStructure(parsed);
+              setStep(2);
+          } else {
+              throw new Error("JSON incompleto gerado pela IA.");
+          }
       } else {
-          throw new Error("Falha ao gerar JSON estruturado.");
+          throw new Error("Falha ao gerar resposta.");
       }
 
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Erro ao criar a estrutura. Tente simplificar a premissa.");
+      setError(err.message || "Erro ao criar a estrutura.");
     } finally {
       setIsProcessing(false);
     }
@@ -276,71 +304,27 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
 
   // --- AGENT 1.5: THE REFINER ---
   const handleRefineStructure = async () => {
-      if (!structure || !refinementText.trim() || !apiKey) return;
+      if (!structure || !refinementText.trim()) return;
 
       setIsProcessing(true);
       setError(null);
 
       try {
-          const ai = new GoogleGenAI({ apiKey: apiKey });
-          
+          const systemInstruction = "Atualize a estrutura do roteiro baseada no feedback. Responda APENAS com JSON válido. NÃO use hashtags.";
           const prompt = `
             Atue como um Arquiteto de Histórias.
-            Você gerou uma estrutura anteriormente, mas o usuário solicitou alterações.
             
             ESTRUTURA ATUAL (JSON):
             ${JSON.stringify(structure)}
 
-            SOLICITAÇÃO DE MUDANÇA DO USUÁRIO:
+            SOLICITAÇÃO DE MUDANÇA:
             "${refinementText}"
 
-            Tarefa: Reescreva a estrutura JSON completa incorporando as mudanças solicitadas. Mantenha o formato JSON estrito.
+            Tarefa: Reescreva a estrutura JSON completa incorporando as mudanças.
           `;
 
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [{ parts: [{ text: prompt }] }],
-            config: {
-                systemInstruction: "Atualize a estrutura do roteiro baseada no feedback. Responda APENAS com JSON válido. NÃO use hashtags.",
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        title: { type: Type.STRING },
-                        logline: { type: Type.STRING },
-                        characters: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    name: { type: Type.STRING },
-                                    role: { type: Type.STRING },
-                                    traits: { type: Type.STRING }
-                                },
-                                required: ["name", "role"]
-                            }
-                        },
-                        outline: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    act: { type: Type.STRING },
-                                    title: { type: Type.STRING },
-                                    description: { type: Type.STRING }
-                                },
-                                required: ["act", "title", "description"]
-                            }
-                        }
-                    },
-                    required: ["title", "logline", "outline"]
-                },
-                temperature: 0.5,
-                maxOutputTokens: 4096 
-            }
-          });
+          const jsonText = await callAI(systemInstruction, prompt, 4096, 0.5);
 
-          const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
           if (jsonText) {
               const parsed = cleanAndParseJSON(jsonText) as StoryStructure;
               setStructure(parsed);
@@ -350,7 +334,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
 
       } catch (err: any) {
           console.error(err);
-          setError("Falha ao refinar a estrutura. Tente novamente.");
+          setError("Falha ao refinar a estrutura.");
       } finally {
           setIsProcessing(false);
       }
@@ -358,60 +342,38 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
 
   // --- AGENT 2: THE WRITER ---
   const handleWriteScript = async () => {
-    if (!structure || !apiKey) return;
+    if (!structure) return;
 
     setIsProcessing(true);
     setError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: apiKey });
         const structureContext = JSON.stringify(structure, null, 2);
-
+        
+        const systemInstruction = "Você é um roteirista criativo (Lead Writer). Responda APENAS com JSON válido contendo blocos de texto. Escreva diálogos naturais.";
+        
         const prompt = `
-            Atue como um Roteirista Sênior (Lead Writer).
-            
             Use a estrutura aprovada abaixo para escrever o roteiro completo.
             Separe o roteiro em blocos lógicos de texto (parágrafos ou falas).
             Mantenha o tom ${tone}.
-            Duração Alvo do Roteiro: ${duration}.
+            Duração Alvo: ${duration}.
             
-            Instrução de Volume: Escreva conteúdo suficiente para cobrir ${duration} de fala em velocidade normal. Seja detalhado e expansivo para atingir esse tempo.
+            Instrução de Volume: Escreva conteúdo suficiente para cobrir ${duration} de fala em velocidade normal.
             
             ESTRUTURA APROVADA:
             ${structureContext}
 
-            Instruções de Saída:
-            Gere um JSON contendo um array de blocos de texto. Cada bloco deve ser uma parte do roteiro pronta para ser falada (TTS).
+            Instruções de Saída JSON:
+            {
+                "blocks": [
+                    { "text": "Texto do bloco 1..." },
+                    { "text": "Texto do bloco 2..." }
+                ]
+            }
         `;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [{ parts: [{ text: prompt }] }],
-            config: {
-                systemInstruction: "Você é um roteirista criativo. Responda APENAS com JSON válido. Escreva diálogos naturais. NÃO gere listas de hashtags. NÃO repita títulos infinitamente.",
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        blocks: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    text: { type: Type.STRING }
-                                },
-                                required: ["text"]
-                            }
-                        }
-                    },
-                    required: ["blocks"]
-                },
-                temperature: temperature, 
-                maxOutputTokens: 8192 
-            }
-        });
+        const jsonText = await callAI(systemInstruction, prompt, 8192, temperature);
 
-        const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
         if (jsonText) {
             const parsed = cleanAndParseJSON(jsonText);
             
@@ -424,7 +386,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                 setGeneratedBlocks(scriptBlocks);
                 setStep(3);
             } else {
-                throw new Error("Formato de resposta inválido.");
+                throw new Error("Formato de resposta inválido (falta 'blocks').");
             }
         }
 
@@ -436,82 +398,49 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
     }
   };
 
-  // --- AGENT 3: THE EXPANDER (New) ---
+  // --- AGENT 3: THE EXPANDER ---
   const handleExpandScript = async () => {
-      if (!apiKey || !structure) return;
+      if (!structure) return;
       setIsExpanding(true);
       setError(null);
 
       try {
-          const ai = new GoogleGenAI({ apiKey: apiKey });
-          
-          // Context: Existing Script + Structure + Tone
           const currentScriptText = generatedBlocks.map(b => b.text).join('\n\n');
           
+          const systemInstruction = "Gere novos blocos de roteiro em JSON. Mantenha o foco. Não desvie do tema.";
           const prompt = `
             ATUE COMO ROTEIRISTA SÊNIOR (Modo: Expansão).
             
             OBJETIVO:
-            O usuário deseja expandir a história. Gere 2 a 3 novos blocos de roteiro que deem continuidade à narrativa atual ou aprofundem o final, SEM perder o foco do tema original.
+            Gere 2 a 3 novos blocos de roteiro que deem continuidade à narrativa atual.
 
-            PREMISSA ORIGINAL: "${premise}"
-            TOM APROVADO: ${tone}
+            PREMISSA: "${premise}"
             
-            CONTEXTO ESTRUTURAL (Resumo):
-            "${structure.logline}"
-
             ÚLTIMA PARTE DO ROTEIRO ATUAL (Contexto):
             "${currentScriptText.slice(-500)}"
 
-            INSTRUÇÃO DE ESCRITA:
-            Escreva a continuação natural. Não repita o que já foi dito. Mantenha a mesma voz e estilo.
-            O conteúdo deve ser coerente com o que veio antes.
+            Formato JSON Esperado:
+            {
+                "new_blocks": [ { "text": "..." } ]
+            }
           `;
 
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [{ parts: [{ text: prompt }] }],
-            config: {
-                systemInstruction: "Gere novos blocos de roteiro JSON. Mantenha o foco. Não desvie do tema.",
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        new_blocks: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    text: { type: Type.STRING }
-                                },
-                                required: ["text"]
-                            }
-                        }
-                    },
-                    required: ["new_blocks"]
-                },
-                temperature: 0.7, 
-                maxOutputTokens: 2048 
-            }
-          });
+          const jsonText = await callAI(systemInstruction, prompt, 2048, 0.7);
 
-          const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
           if (jsonText) {
               const parsed = cleanAndParseJSON(jsonText);
-              
               if (parsed && Array.isArray(parsed.new_blocks)) {
                   const newScriptBlocks: ScriptBlock[] = parsed.new_blocks.map((b: any, index: number) => ({
                       id: `expanded-script-${Date.now()}-${index}`,
                       text: b.text
                   }));
-                  
                   setGeneratedBlocks(prev => [...prev, ...newScriptBlocks]);
               }
           }
 
       } catch (err: any) {
           console.error("Expand error:", err);
-          setError("Erro ao expandir a história. Tente novamente.");
+          setError("Erro ao expandir a história.");
       } finally {
           setIsExpanding(false);
       }
@@ -548,7 +477,16 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                 <BrainCircuit className="w-5 h-5 text-indigo-600" />
                 Criador IA
             </h2>
-            <p className="text-xs text-slate-500">Fluxo de Roteirização Profissional</p>
+            <div className="flex items-center gap-2">
+                <p className="text-xs text-slate-500">Motor:</p>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase ${
+                    activeProvider === 'openai' 
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                }`}>
+                    {activeProvider === 'openai' ? 'OpenAI GPT' : 'Gemini'}
+                </span>
+            </div>
          </div>
 
          <div className="space-y-6 relative">
@@ -616,7 +554,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
                     <div className="text-center mb-8">
                         <h1 className="text-3xl font-bold text-slate-800 mb-2">Qual é a sua ideia?</h1>
-                        <p className="text-slate-500">O Agente Arquiteto irá estruturar sua narrativa antes de escrevermos.</p>
+                        <p className="text-slate-500">O Agente Arquiteto ({activeProvider === 'openai' ? 'via GPT-4' : 'via Gemini'}) irá estruturar sua narrativa.</p>
                     </div>
 
                     <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 space-y-6">

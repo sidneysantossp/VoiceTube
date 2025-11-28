@@ -46,6 +46,7 @@ export interface UserProfile {
   id: string;
   email: string;
   full_name?: string;
+  avatar_url?: string; // New: Profile Picture URL
   role: 'user' | 'admin';
   is_banned?: boolean;
   created_at: string;
@@ -55,6 +56,18 @@ export interface SystemSetting {
   key: string;
   value: string;
   description: string;
+}
+
+export interface UserIntegrations {
+  gemini_key: string;
+  openai_key: string;
+  anthropic_key: string; // Claude
+  xai_key: string; // Grok
+  perplexity_key: string;
+  
+  // Preferences
+  preferred_script_model: 'gemini' | 'openai' | 'claude';
+  preferred_image_model: 'gemini' | 'openai' | 'grok'; // Future use
 }
 
 export const INITIAL_VOICES: VoiceOption[] = [
