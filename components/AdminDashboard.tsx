@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserProfile, SystemSetting } from '../types';
+import { GoogleGenAI } from '@google/genai';
 import { 
   Shield, 
   Users, 
@@ -10,7 +11,10 @@ import {
   CheckCircle, 
   Save, 
   Loader2, 
-  AlertTriangle 
+  AlertTriangle,
+  Zap,
+  XCircle,
+  Check
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -24,6 +28,10 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  // API Key Testing State
+  const [testingKey, setTestingKey] = useState(false);
+  const [keyTestStatus, setKeyTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   useEffect(() => {
     if (isDemo) {
@@ -132,9 +140,60 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
 
   const handleSettingChange = (key: string, newValue: string) => {
     setSettings(prev => prev.map(s => s.key === key ? { ...s, value: newValue } : s));
+    // Reset test status if key changes
+    if (key === 'gemini_api_key') {
+      setKeyTestStatus('idle');
+    }
+  };
+
+  const handleTestConnection = async (apiKey: string) => {
+    if (!apiKey.trim()) {
+      alert("Por favor, insira uma chave para testar.");
+      return;
+    }
+
+    setTestingKey(true);
+    setKeyTestStatus('idle');
+
+    try {
+      // Use the SDK to verify the key works
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ parts: [{ text: "Hello" }] }],
+      });
+
+      if (response && response.text) {
+        setKeyTestStatus('success');
+      } else {
+        throw new Error("Resposta vazia da API");
+      }
+    } catch (error) {
+      console.error("API Key Test Failed:", error);
+      setKeyTestStatus('error');
+    } finally {
+      setTestingKey(false);
+    }
   };
 
   const saveSettings = async () => {
+    
+    // Validation for API Key
+    const geminiSetting = settings.find(s => s.key === 'gemini_api_key');
+    if (geminiSetting) {
+      const key = geminiSetting.value.trim();
+      if (!key) {
+        alert("A Chave API do Gemini não pode ficar vazia.");
+        return;
+      }
+      // Basic format check: Google keys usually start with AIza and are long
+      // Or at least enforce a minimum length to prevent '123'
+      if (key.length < 20) {
+        alert("A Chave API parece inválida (muito curta).");
+        return;
+      }
+    }
+
     setSaving(true);
     if (isDemo) {
         setTimeout(() => {
@@ -293,7 +352,7 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
             </div>
           </div>
         ) : (
-          <div className="max-w-2xl animate-in fade-in">
+          <div className="max-w-3xl animate-in fade-in">
              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex gap-3 text-amber-800 text-sm">
                 <AlertTriangle className="w-5 h-5 flex-shrink-0" />
                 <p>
@@ -315,16 +374,62 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
                         <label className="block text-sm font-bold text-slate-700 mb-2">
                           {setting.description || setting.key}
                         </label>
-                        <div className="relative">
-                          <input 
-                            type="text" 
-                            value={setting.value}
-                            onChange={(e) => handleSettingChange(setting.key, e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-300 rounded-lg p-3 pr-10 font-mono text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
-                            placeholder="Insira o valor da chave..."
-                          />
-                          <Key className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                        <div className="flex gap-2">
+                            <div className="relative flex-1">
+                                <input 
+                                    type="text" 
+                                    value={setting.value}
+                                    onChange={(e) => handleSettingChange(setting.key, e.target.value)}
+                                    className={`w-full bg-slate-50 border rounded-lg p-3 pr-10 font-mono text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none ${
+                                        setting.key === 'gemini_api_key' && keyTestStatus === 'error' 
+                                        ? 'border-red-300 bg-red-50' 
+                                        : setting.key === 'gemini_api_key' && keyTestStatus === 'success'
+                                            ? 'border-emerald-300 bg-emerald-50'
+                                            : 'border-slate-300'
+                                    }`}
+                                    placeholder="Insira o valor da chave..."
+                                />
+                                <Key className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                            </div>
+                            
+                            {/* Gemini API Test Button */}
+                            {setting.key === 'gemini_api_key' && (
+                                <button
+                                    onClick={() => handleTestConnection(setting.value)}
+                                    disabled={testingKey || !setting.value}
+                                    className={`px-4 rounded-lg font-bold text-sm transition-all flex items-center gap-2 border ${
+                                        keyTestStatus === 'success' 
+                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200' 
+                                        : keyTestStatus === 'error'
+                                            ? 'bg-red-100 text-red-700 border-red-200'
+                                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-indigo-600'
+                                    }`}
+                                    title="Testar Conexão com Google Gemini"
+                                >
+                                    {testingKey ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : keyTestStatus === 'success' ? (
+                                        <>
+                                            <Check className="w-4 h-4" />
+                                            OK
+                                        </>
+                                    ) : keyTestStatus === 'error' ? (
+                                        <>
+                                            <XCircle className="w-4 h-4" />
+                                            Erro
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Zap className="w-4 h-4" />
+                                            Testar
+                                        </>
+                                    )}
+                                </button>
+                            )}
                         </div>
+                        {setting.key === 'gemini_api_key' && keyTestStatus === 'error' && (
+                            <p className="text-xs text-red-500 mt-1 ml-1">Falha na conexão. Verifique se a chave é válida e possui permissões.</p>
+                        )}
                       </div>
                     ))}
 
