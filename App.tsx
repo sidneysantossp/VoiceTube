@@ -53,7 +53,9 @@ export default function App() {
     // Check active session
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
-        setSession(session);
+        if (session) {
+            setSession(session);
+        }
         setLoadingSession(false);
       })
       .catch((err) => {
@@ -321,6 +323,22 @@ export default function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    setSession(null); // Ensure state is cleared even for demo/mock sessions
+  };
+
+  const handleDemoLogin = () => {
+      // Create a mock session object
+      const mockSession = {
+          user: {
+              id: 'demo-user-123',
+              email: 'demo@geministudio.com',
+              aud: 'authenticated',
+          },
+          access_token: 'mock-token',
+          refresh_token: 'mock-refresh-token',
+          expires_at: Date.now() + 3600 * 1000
+      };
+      setSession(mockSession);
   };
 
   // Handlers
@@ -610,7 +628,7 @@ export default function App() {
 
   // AUTH SCREEN
   if (!session) {
-    return <Auth />;
+    return <Auth onDemoLogin={handleDemoLogin} />;
   }
 
   // APP SCREEN

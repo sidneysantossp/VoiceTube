@@ -7,10 +7,15 @@ import {
   Loader2, 
   ArrowRight,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  UserCheck
 } from 'lucide-react';
 
-export default function Auth() {
+interface AuthProps {
+  onDemoLogin?: () => void;
+}
+
+export default function Auth({ onDemoLogin }: AuthProps) {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -123,8 +128,22 @@ export default function Auth() {
           </button>
         </form>
 
+        {/* Demo Login Button */}
+        {onDemoLogin && (
+          <div className="mt-4">
+            <button
+              onClick={onDemoLogin}
+              type="button"
+              className="w-full bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+            >
+              <UserCheck className="w-4 h-4" />
+              Entrar Modo Demo
+            </button>
+          </div>
+        )}
+
         {/* Footer / Toggle */}
-        <div className="mt-8 pt-6 border-t border-white/5 text-center">
+        <div className="mt-6 pt-6 border-t border-white/5 text-center">
           <p className="text-slate-400 text-sm mb-3">
             {mode === 'login' ? 'Não tem uma conta?' : 'Já tem uma conta?'}
           </p>
