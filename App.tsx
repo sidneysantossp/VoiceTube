@@ -30,6 +30,11 @@ import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
 
+// --- ENVIRONMENT VARIABLES FIX ---
+// Safely access environment variables
+const env = (import.meta as any).env || {};
+const API_KEY = env.VITE_API_KEY;
+
 const DEFAULT_CONFIG = {
   temperature: 1.0,
   topP: 0.95,
@@ -50,6 +55,15 @@ export default function App() {
   const [loadingSession, setLoadingSession] = useState(true);
 
   useEffect(() => {
+    // Check if we are handling a password reset or email confirmation link
+    // Hash routing often contains access_token
+    const hash = window.location.hash;
+    if (hash && hash.includes('access_token')) {
+        setLoadingSession(true);
+        // Supabase client handles the token parsing automatically 
+        // We just wait a bit for the onAuthStateChange to fire
+    }
+
     // Check active session
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
@@ -68,6 +82,7 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      setLoadingSession(false);
     });
 
     return () => subscription.unsubscribe();
@@ -331,7 +346,7 @@ export default function App() {
       const mockSession = {
           user: {
               id: 'demo-user-123',
-              email: 'demo@geministudio.com',
+              email: 'demo@voicetube.com',
               aud: 'authenticated',
           },
           access_token: 'mock-token',
@@ -345,15 +360,16 @@ export default function App() {
   const handleGenerate = async () => {
     const fullText = getFullText();
     if (!fullText.trim()) return;
-    if (!process.env.API_KEY) {
-      alert("API Key não encontrada! Configure a variável API_KEY no seu provedor.");
+    
+    if (!API_KEY) {
+      alert("API Key não encontrada! Por favor, configure a variável VITE_API_KEY no seu provedor (Vercel).");
       return;
     }
 
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: API_KEY });
       let response;
 
       // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
@@ -423,7 +439,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Generation failed", error);
-      alert("Falha ao gerar o áudio. Por favor, tente novamente.");
+      alert("Falha ao gerar o áudio. Verifique se sua API Key é válida.");
     } finally {
       setIsGenerating(false);
     }
@@ -477,8 +493,8 @@ export default function App() {
   const handlePreview = async (e: React.MouseEvent, voice: VoiceOption) => {
     e.stopPropagation(); // Prevent selecting the voice when clicking preview
 
-    if (!process.env.API_KEY) {
-         alert("API Key não encontrada.");
+    if (!API_KEY) {
+         alert("API Key não encontrada! Configure VITE_API_KEY.");
          return;
     }
 
@@ -503,7 +519,7 @@ export default function App() {
     setIsPreviewLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: API_KEY });
       // Portuguese preview text
       const previewText = `Olá, eu sou a voz ${voice.name}. Testando o áudio em português.`;
       
@@ -641,7 +657,7 @@ export default function App() {
           <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/20">
             <AudioWaveform className="w-6 h-6" />
           </div>
-          <span className="font-bold text-xl tracking-tight">Gemini Studio</span>
+          <span className="font-bold text-xl tracking-tight">Voice Tube</span>
         </div>
         
         <div className="px-4 py-2">

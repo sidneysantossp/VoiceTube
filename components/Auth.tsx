@@ -64,7 +64,7 @@ export default function Auth({ onDemoLogin }: AuthProps) {
           <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/30 transform rotate-3">
             <AudioWaveform className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Gemini Voice Studio</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">Voice Tube</h1>
           <p className="text-slate-400 text-sm">
             {mode === 'login' 
               ? 'Entre para continuar criando' 
