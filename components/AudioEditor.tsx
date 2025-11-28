@@ -60,6 +60,7 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
   const timelineAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const timelineUploadInputRef = useRef<HTMLInputElement>(null);
 
   // DnD Sensors
   const sensors = useSensors(
@@ -310,6 +311,34 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
       };
   };
 
+  const handleTimelineUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      const audio = new Audio(url);
+      audio.onloadedmetadata = () => {
+          const newClip: GeneratedClip = {
+              id: `upload-direct-${Date.now()}`,
+              text: file.name,
+              voiceName: 'Importação Direta',
+              audioUrl: url,
+              createdAt: new Date(),
+              duration: audio.duration
+          };
+          
+          // Add to uploaded library so it can be reused
+          setUploadedClips(prev => [newClip, ...prev]);
+          
+          // Add directly to the first track
+          if (tracks.length > 0) {
+              addClip(newClip, tracks[0]);
+          }
+      };
+      // Reset input
+      e.target.value = '';
+  };
+
   const allSourceClips = [...uploadedClips, ...sourceClips];
 
   // Calculate dynamic ruler length based on duration + padding
@@ -403,6 +432,21 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
                         </div>
 
                         <div className="h-4 w-px bg-slate-700 mx-1"></div>
+
+                        <button
+                            onClick={() => timelineUploadInputRef.current?.click()}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-colors border border-slate-700"
+                        >
+                            <Upload className="w-3.5 h-3.5" />
+                            Importar
+                        </button>
+                        <input 
+                            type="file"
+                            ref={timelineUploadInputRef}
+                            className="hidden"
+                            accept="audio/*"
+                            onChange={handleTimelineUpload}
+                        />
 
                         <button
                             onClick={addTrack}

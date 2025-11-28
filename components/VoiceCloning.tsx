@@ -1,7 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Upload, Play, Pause, Trash2, AlertCircle, CheckCircle2, Clock, ShieldCheck, Loader2 } from 'lucide-react';
+import { Mic, Upload, Play, Pause, Trash2, AlertCircle, CheckCircle2, Clock, ShieldCheck, Loader2, Sparkles, Save, RotateCcw, FileWarning } from 'lucide-react';
 import { VoiceOption } from '../types';
-import { blobToBase64 } from '../utils/audioUtils';
+import { blobToBase64, base64ToArrayBuffer, createWavBlob } from '../utils/audioUtils';
+import { GoogleGenAI, Modality } from '@google/genai';
+
+// Safely access environment variables
+const env = (import.meta as any).env || {};
+const API_KEY = env.VITE_API_KEY;
 
 interface VoiceCloningProps {
   onSaveVoice: (voice: VoiceOption) => void;
@@ -20,17 +25,25 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // New State for Intermediate Preview Step
+  const [createdVoice, setCreatedVoice] = useState<VoiceOption | null>(null);
+  const [testAudioUrl, setTestAudioUrl] = useState<string | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [isPlayingTest, setIsPlayingTest] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const testAudioRef = useRef<HTMLAudioElement | null>(null);
   const timerRef = useRef<any>(null);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (testAudioUrl) URL.revokeObjectURL(testAudioUrl);
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [audioUrl]);
+  }, [audioUrl, testAudioUrl]);
 
   const startRecording = async () => {
     try {
@@ -108,9 +121,12 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
   const handleReset = () => {
     setAudioBlob(null);
     setAudioUrl(null);
+    setCreatedVoice(null);
+    setTestAudioUrl(null);
     setRecordingTime(0);
     setError(null);
     setIsPlaying(false);
+    setConsentGiven(false);
   };
 
   const handleSubmit = async () => {
@@ -129,7 +145,7 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
       return;
     }
     if (!consentGiven) {
-      setError("Você deve autorizar o uso da sua voz.");
+      setError("Você deve autorizar o uso da sua voz para prosseguir.");
       return;
     }
 
@@ -140,7 +156,7 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
         const base64Audio = await blobToBase64(audioBlob);
 
         // Simulate API upload/processing delay
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
 
         const newVoice: VoiceOption = {
           id: `custom-${Date.now()}`,
@@ -151,7 +167,8 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
           base64Audio: base64Audio
         };
 
-        onSaveVoice(newVoice);
+        // Instead of saving immediately, set as created to show preview screen
+        setCreatedVoice(newVoice);
     } catch (e) {
         console.error("Error processing voice:", e);
         setError("Erro ao processar o áudio da voz.");
@@ -160,6 +177,166 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
     }
   };
 
+  const handleTestClone = async () => {
+      if (!createdVoice || !createdVoice.base64Audio || !API_KEY) {
+          setError("Configuração inválida para teste.");
+          return;
+      }
+
+      setIsTesting(true);
+      if (testAudioRef.current) {
+          testAudioRef.current.pause();
+          setIsPlayingTest(false);
+      }
+
+      try {
+          const ai = new GoogleGenAI({ apiKey: API_KEY });
+          const previewText = `Olá! Esta é uma demonstração da voz clonada de ${createdVoice.name}.`;
+
+          const response = await ai.models.generateContent({
+             model: "gemini-2.5-flash",
+             contents: [
+                 {
+                     parts: [
+                        {
+                            inlineData: {
+                                mimeType: "audio/wav",
+                                data: createdVoice.base64Audio
+                            }
+                        },
+                        {
+                            text: `Mimic the speaker in the audio provided and say: "${previewText}". Output only the audio.`
+                        }
+                     ]
+                 }
+             ],
+             config: {
+                 responseModalities: [Modality.AUDIO],
+                 temperature: 1, // High temperature for expressiveness in cloning
+             }
+           });
+
+           const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+           if (base64Audio) {
+               const pcmBuffer = base64ToArrayBuffer(base64Audio);
+               const wavBlob = createWavBlob(pcmBuffer, 24000);
+               const url = URL.createObjectURL(wavBlob);
+               
+               if (testAudioUrl) URL.revokeObjectURL(testAudioUrl);
+               setTestAudioUrl(url);
+               
+               // Auto play
+               setTimeout(() => {
+                   if (testAudioRef.current) {
+                       testAudioRef.current.src = url;
+                       testAudioRef.current.play();
+                       setIsPlayingTest(true);
+                   }
+               }, 100);
+           }
+
+      } catch (e) {
+          console.error("Test failed", e);
+          setError("Falha ao gerar preview da voz. Tente novamente.");
+      } finally {
+          setIsTesting(false);
+      }
+  };
+
+  const handleFinalSave = () => {
+      if (createdVoice) {
+          onSaveVoice(createdVoice);
+      }
+  };
+
+  const toggleTestPlayback = () => {
+      if (testAudioRef.current) {
+          if (isPlayingTest) {
+              testAudioRef.current.pause();
+          } else {
+              testAudioRef.current.play();
+          }
+          setIsPlayingTest(!isPlayingTest);
+      }
+  };
+
+  // SUCCESS / PREVIEW VIEW
+  if (createdVoice) {
+      return (
+        <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
+             <div className="bg-white rounded-2xl p-8 shadow-xl border border-indigo-100 text-center relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+                
+                <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+                </div>
+                
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Modelo de Voz Criado!</h2>
+                <p className="text-slate-500 mb-8">
+                    Sua voz <strong>{createdVoice.name}</strong> foi processada e está pronta para uso.
+                </p>
+
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200 mb-8">
+                    <div className="flex items-center justify-between mb-4">
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Testar Clonagem</span>
+                        {isTesting && <span className="text-xs text-indigo-500 animate-pulse">Gerando áudio...</span>}
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                         <button
+                            onClick={testAudioUrl ? toggleTestPlayback : handleTestClone}
+                            disabled={isTesting}
+                            className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+                                isTesting 
+                                ? 'bg-slate-200 text-slate-400 cursor-wait'
+                                : testAudioUrl 
+                                    ? isPlayingTest 
+                                        ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                                        : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-200'
+                                    : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-200'
+                            }`}
+                         >
+                             {isTesting ? (
+                                 <Loader2 className="w-5 h-5 animate-spin" />
+                             ) : testAudioUrl ? (
+                                 isPlayingTest ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />
+                             ) : (
+                                 <Sparkles className="w-5 h-5" />
+                             )}
+                             {testAudioUrl ? (isPlayingTest ? 'Pausar Preview' : 'Ouvir Preview') : 'Gerar Preview da Voz'}
+                         </button>
+                    </div>
+                    {testAudioUrl && (
+                        <p className="text-xs text-slate-400 mt-3 text-center italic">
+                            "Olá! Esta é uma demonstração da voz clonada de {createdVoice.name}."
+                        </p>
+                    )}
+                </div>
+
+                <div className="flex gap-3">
+                    <button
+                        onClick={handleReset}
+                        className="flex-1 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center gap-2"
+                    >
+                        <RotateCcw className="w-4 h-4" />
+                        Descartar
+                    </button>
+                    <button
+                        onClick={handleFinalSave}
+                        className="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2"
+                    >
+                        <Save className="w-4 h-4" />
+                        Salvar na Biblioteca
+                    </button>
+                </div>
+
+                <audio ref={testAudioRef} onEnded={() => setIsPlayingTest(false)} className="hidden" />
+             </div>
+        </div>
+      );
+  }
+
+  // STANDARD VIEW (Record/Upload)
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       {/* Header Card */}
@@ -357,7 +534,7 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
                 </div>
             </div>
 
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div className={`p-4 rounded-xl border transition-all ${consentGiven ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
                <label className="flex items-start gap-3 cursor-pointer">
                  <input 
                    type="checkbox" 
@@ -365,9 +542,14 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
                    onChange={(e) => setConsentGiven(e.target.checked)}
                    className="mt-1 w-5 h-5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
                  />
-                 <div className="text-sm text-slate-600 leading-relaxed">
-                   <span className="font-bold text-slate-800 block mb-1">Consentimento de Uso</span>
-                   Eu confirmo que tenho os direitos necessários para clonar esta voz e autorizo a plataforma a processar este áudio para fins de síntese de fala.
+                 <div className="text-sm leading-relaxed">
+                   <div className="flex items-center gap-2 mb-1">
+                        {consentGiven ? <ShieldCheck className="w-4 h-4 text-emerald-600" /> : <FileWarning className="w-4 h-4 text-amber-600" />}
+                        <span className={`font-bold ${consentGiven ? 'text-emerald-800' : 'text-amber-800'}`}>Consentimento de Uso Obrigatório</span>
+                   </div>
+                   <p className={`${consentGiven ? 'text-emerald-700' : 'text-amber-700'}`}>
+                     Eu declaro que possuo os direitos sobre este áudio e autorizo explicitamente o uso desta voz para fins de clonagem e síntese de fala na plataforma.
+                   </p>
                  </div>
                </label>
             </div>
@@ -382,8 +564,13 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
             <div className="flex justify-end pt-4">
               <button
                 onClick={handleSubmit}
-                disabled={isProcessing}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3.5 rounded-xl font-bold shadow-lg shadow-indigo-200 flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
+                disabled={isProcessing || !consentGiven}
+                className={`px-8 py-3.5 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all ${
+                    isProcessing || !consentGiven
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200'
+                }`}
+                title={!consentGiven ? "Marque a caixa de consentimento para continuar" : ""}
               >
                 {isProcessing ? (
                   <>
