@@ -1,8 +1,10 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Upload, Play, Pause, Trash2, AlertCircle, CheckCircle2, Clock, ShieldCheck, Loader2, Sparkles, Save, RotateCcw, FileWarning } from 'lucide-react';
 import { VoiceOption } from '../types';
 import { blobToBase64, base64ToArrayBuffer, createWavBlob } from '../utils/audioUtils';
 import { GoogleGenAI, Modality } from '@google/genai';
+import { supabase } from '../lib/supabase';
 
 interface VoiceCloningProps {
   onSaveVoice: (voice: VoiceOption) => void;
@@ -149,22 +151,20 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
     setIsProcessing(true);
 
     try {
-        // Convert Blob to Base64 to store in memory for usage
+        // TEMPORARY: Convert to Base64 for PREVIEW ONLY
+        // We do NOT upload to Supabase yet, to save storage.
+        // We only upload on "Salvar na Biblioteca"
         const base64Audio = await blobToBase64(audioBlob);
 
-        // Simulate API upload/processing delay
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
         const newVoice: VoiceOption = {
-          id: `custom-${Date.now()}`,
+          id: `temp-${Date.now()}`,
           name: voiceName,
-          description: 'Voz clonada personalizada (Sintetizada)',
+          description: 'Voz clonada personalizada (Preview)',
           gender: gender,
           isCustom: true,
-          base64Audio: base64Audio
+          base64Audio: base64Audio // Kept for preview
         };
 
-        // Instead of saving immediately, set as created to show preview screen
         setCreatedVoice(newVoice);
     } catch (e) {
         console.error("Error processing voice:", e);
@@ -240,9 +240,67 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
       }
   };
 
-  const handleFinalSave = () => {
-      if (createdVoice) {
-          onSaveVoice(createdVoice);
+  const handleFinalSave = async () => {
+      if (!createdVoice || !audioBlob) return;
+      
+      setIsProcessing(true);
+      try {
+          // 1. Get User ID
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) throw new Error("Usuário não autenticado.");
+
+          // 2. Upload to Supabase Storage
+          const fileName = `${user.id}/${Date.now()}_${createdVoice.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.wav`;
+          
+          const { data: uploadData, error: uploadError } = await supabase.storage
+              .from('voice-samples')
+              .upload(fileName, audioBlob, {
+                  contentType: 'audio/wav',
+                  upsert: true
+              });
+
+          if (uploadError) throw uploadError;
+
+          // 3. Get Public URL
+          const { data: { publicUrl } } = supabase.storage
+              .from('voice-samples')
+              .getPublicUrl(fileName);
+
+          // 4. Save Metadata to Database
+          const { data: dbData, error: dbError } = await supabase
+              .from('custom_voices')
+              .insert({
+                  user_id: user.id,
+                  name: createdVoice.name,
+                  description: createdVoice.description,
+                  gender: createdVoice.gender,
+                  storage_path: fileName,
+                  public_url: publicUrl,
+                  // IMPORTANT: We do NOT save base64Audio to DB to keep it light
+              })
+              .select()
+              .single();
+
+          if (dbError) throw dbError;
+
+          // 5. Notify Parent
+          const finalVoice: VoiceOption = {
+              id: dbData.id,
+              name: dbData.name,
+              description: dbData.description,
+              gender: dbData.gender as 'Male' | 'Female',
+              isCustom: true,
+              public_url: publicUrl,
+              storage_path: fileName
+          };
+
+          onSaveVoice(finalVoice);
+
+      } catch (err: any) {
+          console.error("Save Error:", err);
+          setError("Erro ao salvar voz na nuvem: " + (err.message || err));
+      } finally {
+          setIsProcessing(false);
       }
   };
 
@@ -268,9 +326,9 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
                     <CheckCircle2 className="w-10 h-10 text-emerald-600" />
                 </div>
                 
-                <h2 className="text-2xl font-bold text-slate-800 mb-2">Modelo de Voz Criado!</h2>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Modelo de Voz Pronto!</h2>
                 <p className="text-slate-500 mb-8">
-                    Sua voz <strong>{createdVoice.name}</strong> foi processada e está pronta para uso.
+                    Sua voz <strong>{createdVoice.name}</strong> está pronta para ser salva na nuvem.
                 </p>
 
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-200 mb-8">
@@ -310,6 +368,13 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
                     )}
                 </div>
 
+                {error && (
+                    <div className="p-3 bg-rose-50 text-rose-600 rounded-lg text-sm flex items-center gap-2 mb-4">
+                        <AlertCircle className="w-4 h-4" />
+                        {error}
+                    </div>
+                )}
+
                 <div className="flex gap-3">
                     <button
                         onClick={handleReset}
@@ -320,10 +385,13 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
                     </button>
                     <button
                         onClick={handleFinalSave}
-                        className="flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2"
+                        disabled={isProcessing}
+                        className={`flex-1 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-200 transition-all flex items-center justify-center gap-2 ${
+                            isProcessing ? 'opacity-70 cursor-not-allowed' : ''
+                        }`}
                     >
-                        <Save className="w-4 h-4" />
-                        Salvar na Biblioteca
+                        {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        {isProcessing ? 'Salvando...' : 'Salvar na Biblioteca'}
                     </button>
                 </div>
 

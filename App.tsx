@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { supabase } from './lib/supabase';
@@ -31,7 +32,7 @@ import {
   Menu
 } from 'lucide-react';
 import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile } from './types';
-import { createWavBlob, base64ToArrayBuffer, processAudioBlob } from './utils/audioUtils';
+import { createWavBlob, base64ToArrayBuffer, processAudioBlob, blobToBase64 } from './utils/audioUtils';
 import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
@@ -52,7 +53,6 @@ const DEFAULT_CONFIG = {
 
 const STORAGE_KEYS = {
   CONFIG: 'gemini_voice_model_config',
-  VOICES: 'gemini_voice_custom_voices',
   HISTORY: 'gemini_voice_history_clips',
   MERGED: 'gemini_voice_merged_clips',
   LOCAL_API_KEY: 'gemini_voice_user_api_key'
@@ -208,19 +208,35 @@ export default function App() {
   
   // --- STATE INITIALIZATION WITH PERSISTENCE ---
 
-  // 1. Voices
-  const [voices, setVoices] = useState<VoiceOption[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.VOICES);
-      if (saved) {
-        return JSON.parse(saved) || [];
+  // 1. Voices (Now loaded from DB + Initial)
+  const [voices, setVoices] = useState<VoiceOption[]>(INITIAL_VOICES);
+
+  // Load Custom Voices from Supabase
+  useEffect(() => {
+      if (session?.user?.id) {
+          const fetchCustomVoices = async () => {
+              const { data, error } = await supabase
+                  .from('custom_voices')
+                  .select('*')
+                  .eq('user_id', session.user.id);
+              
+              if (data) {
+                  // Map DB snake_case to frontend camelCase
+                  const customVoices: VoiceOption[] = data.map(v => ({
+                      id: v.id,
+                      name: v.name,
+                      description: v.description || 'Voz Personalizada',
+                      gender: v.gender || 'Male',
+                      isCustom: true,
+                      public_url: v.public_url,
+                      storage_path: v.storage_path
+                  }));
+                  setVoices([...INITIAL_VOICES, ...customVoices]);
+              }
+          };
+          fetchCustomVoices();
       }
-    } catch (e) {
-      console.error("Failed to load voices from storage (corrupted). Resetting.", e);
-      localStorage.removeItem(STORAGE_KEYS.VOICES); // Self-healing
-    }
-    return INITIAL_VOICES;
-  });
+  }, [session]);
 
   // 2. History (Requires Date parsing)
   const [history, setHistory] = useState<GeneratedClip[]>(() => {
@@ -287,9 +303,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(modelConfig));
   }, [modelConfig]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.VOICES, JSON.stringify(voices));
-  }, [voices]);
+  // Voice persistence removed as we load from DB now
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history));
@@ -478,16 +492,25 @@ export default function App() {
       setVoices(prev => [...prev, newVoice]);
       setSelectedVoice(newVoice);
       setCurrentView('tts'); // Redirect back to studio
-      alert(`Voz "${newVoice.name}" criada com sucesso e pronta para uso!`);
+      alert(`Voz "${newVoice.name}" salva na nuvem e pronta para uso!`);
   };
 
-  const handleDeleteVoice = (e: React.MouseEvent, voiceId: string) => {
+  const handleDeleteVoice = async (e: React.MouseEvent, voiceId: string) => {
     e.stopPropagation();
-    if (confirm('Tem certeza que deseja excluir esta voz personalizada?')) {
-      setVoices((prev) => prev.filter((v) => v.id !== voiceId));
-      if (selectedVoice.id === voiceId) {
-        setSelectedVoice(INITIAL_VOICES[0]);
-      }
+    if (!confirm('Tem certeza que deseja excluir esta voz personalizada?')) return;
+
+    // 1. Delete from DB (Supabase) if it's a SaaS voice
+    const voiceToDelete = voices.find(v => v.id === voiceId);
+    if (voiceToDelete?.storage_path) {
+        // Delete from Storage Bucket
+        await supabase.storage.from('voice-samples').remove([voiceToDelete.storage_path]);
+        // Delete from DB Table
+        await supabase.from('custom_voices').delete().eq('id', voiceId);
+    }
+
+    setVoices((prev) => prev.filter((v) => v.id !== voiceId));
+    if (selectedVoice.id === voiceId) {
+      setSelectedVoice(INITIAL_VOICES[0]);
     }
   };
 
@@ -525,7 +548,19 @@ export default function App() {
       let response;
 
       // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
-      if (selectedVoice.isCustom && selectedVoice.base64Audio) {
+      if (selectedVoice.isCustom) {
+         
+         let audioDataBase64 = selectedVoice.base64Audio;
+
+         // If we have a public_url (SaaS), fetch the blob and convert to Base64
+         if (!audioDataBase64 && selectedVoice.public_url) {
+             const audioRes = await fetch(selectedVoice.public_url);
+             const audioBlob = await audioRes.blob();
+             audioDataBase64 = await blobToBase64(audioBlob);
+         }
+
+         if (!audioDataBase64) throw new Error("Audio data not found for custom voice.");
+
          // USE MULTIMODAL MODEL to mimic the audio style
          // Model: gemini-2.5-flash which supports audio-in and audio-out
          response = await ai.models.generateContent({
@@ -536,7 +571,7 @@ export default function App() {
                         {
                             inlineData: {
                                 mimeType: "audio/wav",
-                                data: selectedVoice.base64Audio
+                                data: audioDataBase64
                             }
                         },
                         {
@@ -591,7 +626,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Generation failed", error);
-      alert("Falha ao gerar o áudio. Verifique se sua API Key é válida.");
+      alert("Falha ao gerar o áudio. Verifique sua API Key e conexão.");
     } finally {
       setIsGenerating(false);
     }
@@ -678,7 +713,18 @@ export default function App() {
       
       let response;
 
-      if (voice.isCustom && voice.base64Audio) {
+      if (voice.isCustom) {
+           let audioDataBase64 = voice.base64Audio;
+
+           // If using cloud URL, fetch and convert
+           if (!audioDataBase64 && voice.public_url) {
+                const res = await fetch(voice.public_url);
+                const blob = await res.blob();
+                audioDataBase64 = await blobToBase64(blob);
+           }
+
+           if (!audioDataBase64) throw new Error("Audio source missing");
+
            // Custom Voice Preview Logic
            response = await ai.models.generateContent({
              model: "gemini-2.5-flash",
@@ -688,7 +734,7 @@ export default function App() {
                         {
                             inlineData: {
                                 mimeType: "audio/wav",
-                                data: voice.base64Audio
+                                data: audioDataBase64
                             }
                         },
                         {

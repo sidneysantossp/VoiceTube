@@ -5,7 +5,9 @@ export interface VoiceOption {
   description: string;
   gender: 'Male' | 'Female';
   isCustom?: boolean; // Flag to identify cloned voices
-  base64Audio?: string; // Base64 string of the recorded audio for cloning
+  base64Audio?: string; // Legacy: Base64 string (Keep for compatibility)
+  public_url?: string; // New: Cloud Storage URL
+  storage_path?: string; // New: Storage Path
 }
 
 export interface GeneratedClip {
