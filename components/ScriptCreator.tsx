@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { 
@@ -60,12 +61,31 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
   // Step 3: Final Script
   const [generatedBlocks, setGeneratedBlocks] = useState<ScriptBlock[]>([]);
 
-  // Helper to strip markdown (```json ... ```) and handle incomplete JSON slightly better
+  // Helper to safely extract and parse JSON from mixed content
   const cleanAndParseJSON = (text: string) => {
-      // Remove Markdown code blocks
+      // 1. Remove Markdown code blocks
       let cleaned = text.replace(/```json\n?|```/g, '').trim();
+      
+      // 2. Attempt to extract the JSON object using regex if there's trailing garbage
+      // Matches from the first '{' to the last '}'
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+          cleaned = jsonMatch[0];
+      }
+
       try {
-          return JSON.parse(cleaned);
+          const parsed = JSON.parse(cleaned);
+          
+          // 3. Post-parsing Validation: Truncate runaway strings
+          // This protects the UI if the model generated a 5000-char title despite instructions
+          if (parsed.title && typeof parsed.title === 'string' && parsed.title.length > 200) {
+              parsed.title = parsed.title.substring(0, 197) + '...';
+          }
+          if (parsed.logline && typeof parsed.logline === 'string' && parsed.logline.length > 500) {
+              parsed.logline = parsed.logline.substring(0, 497) + '...';
+          }
+
+          return parsed;
       } catch (e) {
           console.error("JSON Parse Error. Raw Text:", text);
           throw new Error("A IA gerou uma resposta inválida ou incompleta. Tente simplificar.");
@@ -99,7 +119,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
         Público: ${targetAudience}
 
         Gere um JSON com:
-        1. Um título cativante.
+        1. Um título cativante (MÁXIMO 100 caracteres).
         2. Uma Logline (resumo de 1 frase).
         3. Lista de Personagens (se aplicável ao gênero, ou apresentadores).
         4. Uma estrutura (Outline) dividida em batidas (Beats/Cenas).
@@ -110,7 +130,8 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
         model: "gemini-2.5-flash",
         contents: [{ parts: [{ text: prompt }] }],
         config: {
-            systemInstruction: "Você é um especialista em estruturação de roteiros. Você organiza ideias caóticas em estruturas lógicas. Responda APENAS com JSON.",
+            // STRICT INSTRUCTION TO PREVENT LOOPS
+            systemInstruction: "Você é um especialista em estruturação de roteiros. Responda APENAS com JSON válido. NÃO use hashtags. NÃO repita palavras-chave. Títulos devem ser curtos e diretos.",
             responseMimeType: "application/json",
             responseSchema: {
                 type: Type.OBJECT,
@@ -125,7 +146,8 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                                 name: { type: Type.STRING },
                                 role: { type: Type.STRING },
                                 traits: { type: Type.STRING }
-                            }
+                            },
+                            required: ["name", "role"]
                         }
                     },
                     outline: {
@@ -136,13 +158,15 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                                 act: { type: Type.STRING, description: "Ex: Intro, Desenvolvimento, Clímax" },
                                 title: { type: Type.STRING },
                                 description: { type: Type.STRING }
-                            }
+                            },
+                            required: ["act", "title", "description"]
                         }
                     }
-                }
+                },
+                required: ["title", "logline", "outline"]
             },
-            temperature: 0.5, // Lower temperature for structure logic
-            maxOutputTokens: 4096 // Ensure enough room for structure
+            temperature: 0.4, // Keep low for structural stability
+            maxOutputTokens: 4096 
         }
       });
 
@@ -194,7 +218,7 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
             model: "gemini-2.5-flash",
             contents: [{ parts: [{ text: prompt }] }],
             config: {
-                systemInstruction: "Você é um roteirista criativo. Escreva diálogos naturais e narrativas envolventes. Foque no conteúdo falado.",
+                systemInstruction: "Você é um roteirista criativo. Responda APENAS com JSON válido. Escreva diálogos naturais. NÃO gere listas de hashtags.",
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -205,13 +229,15 @@ export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorP
                                 type: Type.OBJECT,
                                 properties: {
                                     text: { type: Type.STRING }
-                                }
+                                },
+                                required: ["text"]
                             }
                         }
-                    }
+                    },
+                    required: ["blocks"]
                 },
-                temperature: temperature, // Use user-defined creativity
-                maxOutputTokens: 8192 // HIGH LIMIT to prevent "Unterminated string" on long scripts
+                temperature: temperature, 
+                maxOutputTokens: 8192 // High limit needed for long scripts
             }
         });
 
