@@ -25,7 +25,10 @@ import {
   LogOut,
   BookOpen,
   ShieldCheck,
-  KeyRound
+  KeyRound,
+  User,
+  LayoutDashboard,
+  Menu
 } from 'lucide-react';
 import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile } from './types';
 import { createWavBlob, base64ToArrayBuffer, processAudioBlob } from './utils/audioUtils';
@@ -34,6 +37,7 @@ import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
 import ScriptCreator from './components/ScriptCreator';
 import AdminDashboard from './components/AdminDashboard';
+import UserProfileModal from './components/UserProfileModal';
 
 // --- ENVIRONMENT VARIABLES FIX ---
 // Safely access environment variables
@@ -117,15 +121,8 @@ export default function App() {
           setUserProfile(profile as UserProfile);
       }
 
-      // 2. Try to fetch Global System Key (if defined in DB)
-      // This might fail if the user is NOT admin and RLS is strict, 
-      // but for "Public" usage we might want a specific policy or edge function.
-      // For this implementation, let's assume if it fails, we fallback to env/local.
-      // NOTE: In a real secure app, the backend would proxy calls. Since this is client-side,
-      // we expose the key to the client if we want them to use a "Global" key.
       try {
           // Attempt to fetch global key. 
-          // Note: RLS usually blocks this for non-admins unless we open a policy for reading 'gemini_api_key'
           const { data: settings } = await supabase
             .from('system_settings')
             .select('value')
@@ -164,6 +161,11 @@ export default function App() {
 
   // Navigation State
   const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'admin'>('tts');
+
+  // User Menu State
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // State
   // Replace simple text string with Blocks system
@@ -294,11 +296,14 @@ export default function App() {
     }
   }, []);
 
-  // Close dropdown when clicking outside
+  // Close dropdowns when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsVoiceDropdownOpen(false);
+      }
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -432,6 +437,15 @@ export default function App() {
           expires_at: Date.now() + 3600 * 1000
       };
       setSession(mockSession);
+      
+      // Force Demo User as Admin
+      setUserProfile({
+          id: 'demo-user-123',
+          email: 'demo@voicetube.com',
+          full_name: 'Admin Demo',
+          role: 'admin',
+          created_at: new Date().toISOString()
+      });
   };
 
   // Handlers
@@ -740,7 +754,7 @@ export default function App() {
           <span className="font-bold text-xl tracking-tight">Voice Tube</span>
         </div>
         
-        <div className="px-4 py-2">
+        <div className="px-4 py-2 flex-1">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Menu Principal</p>
           <nav className="space-y-1">
             <button 
@@ -787,44 +801,13 @@ export default function App() {
               <Scissors className="w-5 h-5" />
               Edição de Áudio
             </button>
-            
-            {/* ADMIN LINK (Conditionally Rendered) */}
-            {userProfile?.role === 'admin' && (
-                <button 
-                onClick={() => setCurrentView('admin')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all mt-4 border border-indigo-500/30 ${
-                    currentView === 'admin' 
-                    ? 'bg-indigo-900/50 text-indigo-200 shadow-md' 
-                    : 'text-indigo-400 hover:bg-slate-800 hover:text-indigo-300'
-                }`}
-                >
-                <ShieldCheck className="w-5 h-5" />
-                Admin Dashboard
-                </button>
-            )}
-
           </nav>
         </div>
         
-        <div className="mt-auto p-4 border-t border-slate-800 space-y-3">
-           <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
-             <div className="flex items-center gap-2 mb-2">
-               <div className={`w-2 h-2 rounded-full animate-pulse ${userProfile?.is_banned ? 'bg-red-500' : 'bg-green-500'}`}></div>
-               <span className="text-xs font-medium text-slate-300 truncate w-32">{session.user.email}</span>
-             </div>
-             <p className="text-[10px] text-slate-500 flex justify-between">
-                <span>v1.6.0</span>
-                {userProfile?.role === 'admin' && <span className="text-indigo-400 font-bold">ADMIN</span>}
-             </p>
+        <div className="p-4 border-t border-slate-800">
+           <div className="text-[10px] text-slate-600 text-center">
+                &copy; 2024 Voice Tube - v1.6.0
            </div>
-           
-           <button 
-             onClick={handleLogout}
-             className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 py-2 rounded-lg transition-colors text-xs font-bold uppercase tracking-wide"
-           >
-             <LogOut className="w-4 h-4" />
-             Sair
-           </button>
         </div>
       </aside>
 
@@ -832,7 +815,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 h-full">
         
         {/* Header */}
-        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 flex-shrink-0 z-10">
+        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 flex-shrink-0 z-30 relative">
           <h1 className="text-xl font-bold text-slate-800">
             {currentView === 'tts' && 'Texto para Voz'}
             {currentView === 'cloning' && 'Clonagem de Voz'}
@@ -840,6 +823,7 @@ export default function App() {
             {currentView === 'script-creator' && 'Criador de Roteiro (AI)'}
             {currentView === 'admin' && 'Admin Dashboard'}
           </h1>
+
           <div className="flex items-center gap-4">
              {/* API Key Manager */}
              <button 
@@ -854,12 +838,79 @@ export default function App() {
                 title={isGlobalKey ? "Chave Global do Sistema Ativa" : "Configurar sua API Key"}
              >
                 <KeyRound className="w-3.5 h-3.5" />
-                {isGlobalKey ? 'Chave Global Ativa' : apiKey ? 'Chave Configurada' : 'Configurar Chave'}
+                {isGlobalKey ? 'Chave Global' : apiKey ? 'Chave Ativa' : 'Configurar Key'}
              </button>
 
-             <div className="text-sm text-slate-500 font-medium bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div>
-                Powered by Gemini 2.5
+             <div className="h-6 w-px bg-slate-200 mx-1"></div>
+
+             {/* USER WIDGET (NAVBAR) */}
+             <div className="relative" ref={userMenuRef}>
+                <button 
+                  onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                  className="flex items-center gap-3 hover:bg-slate-50 p-1.5 rounded-lg transition-colors border border-transparent hover:border-slate-200 focus:outline-none"
+                >
+                    <div className="text-right hidden sm:block">
+                        <p className="text-xs font-bold text-slate-700 truncate max-w-[120px]">
+                            {userProfile?.full_name || session.user.email.split('@')[0]}
+                        </p>
+                        <p className="text-[10px] text-slate-400 capitalize">
+                            {userProfile?.role || 'User'}
+                        </p>
+                    </div>
+                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 overflow-hidden">
+                        <User className="w-5 h-5" />
+                    </div>
+                    <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Dropdown Menu */}
+                {isUserMenuOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="px-4 py-3 border-b border-slate-100">
+                            <p className="text-sm font-bold text-slate-800 truncate">{session.user.email}</p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold uppercase ${userProfile?.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-500'}`}>
+                                {userProfile?.role === 'admin' ? 'Administrador' : 'Membro'}
+                            </span>
+                        </div>
+                        
+                        <div className="py-1">
+                            <button 
+                                onClick={() => {
+                                    setShowProfileModal(true);
+                                    setIsUserMenuOpen(false);
+                                }}
+                                className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
+                            >
+                                <User className="w-4 h-4" />
+                                Meu Perfil
+                            </button>
+                            
+                            {/* Conditional Admin Link */}
+                            {userProfile?.role === 'admin' && (
+                                <button 
+                                    onClick={() => {
+                                        setCurrentView('admin');
+                                        setIsUserMenuOpen(false);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
+                                >
+                                    <LayoutDashboard className="w-4 h-4" />
+                                    Painel Admin
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="border-t border-slate-100 py-1">
+                            <button 
+                                onClick={handleLogout}
+                                className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 flex items-center gap-2"
+                            >
+                                <LogOut className="w-4 h-4" />
+                                Sair
+                            </button>
+                        </div>
+                    </div>
+                )}
              </div>
           </div>
         </header>
@@ -867,8 +918,8 @@ export default function App() {
         {/* Scrollable Area */}
         <main className="flex-1 overflow-y-auto bg-slate-50/50">
           
-          {currentView === 'admin' && userProfile?.role === 'admin' ? (
-              <AdminDashboard />
+          {currentView === 'admin' ? (
+              <AdminDashboard isDemo={session?.user?.id === 'demo-user-123'} />
           ) : currentView === 'editor' ? (
               <AudioEditor 
                 sourceClips={history}
@@ -1386,6 +1437,15 @@ export default function App() {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* User Profile Modal */}
+      {showProfileModal && (
+        <UserProfileModal 
+            user={session.user} 
+            profile={userProfile} 
+            onClose={() => setShowProfileModal(false)} 
+        />
       )}
 
       {/* Hidden Audio Element for Playback */}

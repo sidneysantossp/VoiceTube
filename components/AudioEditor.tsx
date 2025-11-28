@@ -18,6 +18,10 @@ import {
   DropAnimation
 } from '@dnd-kit/core';
 import { 
+  SortableContext, 
+  verticalListSortingStrategy 
+} from '@dnd-kit/sortable';
+import { 
   Play, 
   Pause, 
   Download, 
@@ -56,7 +60,7 @@ const dropAnimation: DropAnimation = {
 };
 
 export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, onDeleteMerged }: AudioEditorProps) {
-  const { timeline, tracks, addClip, removeClip, updateClip, moveClip, addTrack, removeTrack, getTotalDuration, previewMix } = useTimeline();
+  const { timeline, tracks, addClip, removeClip, updateClip, moveClip, moveTrack, addTrack, removeTrack, getTotalDuration, previewMix } = useTimeline();
   const [isProcessing, setIsProcessing] = useState(false);
   const [playPreviewId, setPlayPreviewId] = useState<string | null>(null);
   
@@ -115,9 +119,13 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
     
+    // Check for Track drag
+    if (active.data.current?.type === 'Track') {
+        setActiveDragItem({ type: 'Track', id: active.id });
+        return;
+    }
+
     // Store the data of the active item for the overlay
-    // The data structure depends on DraggableSidebarItem ({ type: 'SourceClip', clip }) 
-    // or TimelineClipItem ({ type: 'TimelineClip', clip })
     if (active.data.current) {
         setActiveDragItem(active.data.current);
     }
@@ -127,8 +135,10 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     const { active, over } = event;
     if (!over) return;
 
+    // Skip if dragging a Track (Track reordering is handled in DragEnd or effectively by SortableContext visuals)
+    if (active.data.current?.type === 'Track') return;
+
     // Only handle real-time sorting for TimelineClips (both same-track and cross-track)
-    // SourceClips (from sidebar) are handled in DragEnd to avoid complex insertion logic during drag
     if (active.data.current?.type !== 'TimelineClip') return;
 
     const activeId = active.id;
@@ -145,7 +155,6 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     // Case 1: Dragging over another CLIP (Sorting/Reordering)
     if (overClip) {
         // We call moveClip for both same-track and cross-track sorting
-        // This visualizes the swap immediately
         moveClip(activeId as string, overId as string);
     } 
     // Case 2: Dragging over an EMPTY TRACK AREA (Moving to Track)
@@ -162,6 +171,15 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     setActiveDragItem(null);
 
     if (!over) return;
+
+    // 0. Handle Track Reordering
+    if (active.data.current?.type === 'Track') {
+        if (active.id !== over.id) {
+            // Ensure we are dropping onto another track
+            moveTrack(active.id as string, over.id as string);
+        }
+        return;
+    }
 
     const activeId = active.id;
     const overId = over.id;
@@ -509,19 +527,22 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
                          </div>
                      </div>
 
-                    <div className="pb-10">
-                        {tracks.map((trackId) => (
-                            <TimelineTrack 
-                                key={trackId}
-                                trackId={trackId}
-                                clips={timeline.filter(c => c.trackId === trackId)}
-                                removeClip={removeClip}
-                                updateClip={updateClip}
-                                removeTrack={removeTrack}
-                                canRemoveTrack={tracks.length > 1}
-                                pixelsPerSecond={pixelsPerSecond}
-                            />
-                        ))}
+                    <div className="pb-10 pt-2 px-2">
+                        {/* Sortable Context for Tracks (Vertical) */}
+                        <SortableContext items={tracks} strategy={verticalListSortingStrategy}>
+                            {tracks.map((trackId) => (
+                                <TimelineTrack 
+                                    key={trackId}
+                                    trackId={trackId}
+                                    clips={timeline.filter(c => c.trackId === trackId)}
+                                    removeClip={removeClip}
+                                    updateClip={updateClip}
+                                    removeTrack={removeTrack}
+                                    canRemoveTrack={tracks.length > 1}
+                                    pixelsPerSecond={pixelsPerSecond}
+                                />
+                            ))}
+                        </SortableContext>
                         
                         {/* Empty State Hint */}
                         {timeline.length === 0 && (
@@ -646,28 +667,36 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
         {/* Drag Overlay (Visual Follower) */}
         <DragOverlay className="pointer-events-none" dropAnimation={dropAnimation}>
             {activeDragItem ? (
-                 <div 
-                    className={`p-2 rounded-lg border border-indigo-500/50 bg-slate-700 shadow-2xl z-50 ring-2 ring-indigo-500 flex items-center gap-2`}
-                    style={activeDragItem.type === 'TimelineClip' ? { 
-                        width: `${Math.max(40, ((activeDragItem.clip?.duration || 5) * pixelsPerSecond))}px`,
-                        height: '42px'
-                    } : {
-                        width: '240px',
-                        transform: 'rotate(3deg)'
-                    }}
-                 >
-                    <GripVertical className="w-4 h-4 text-slate-400" />
-                    <div className="flex-1 min-w-0 overflow-hidden">
-                        <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[10px] font-bold text-slate-200 truncate max-w-[120px] bg-slate-900/50 px-1.5 rounded">
-                                {activeDragItem.clip?.voiceName}
-                            </span>
+                 activeDragItem.type === 'Track' ? (
+                     // Visual for Track dragging
+                     <div className="w-[600px] h-32 bg-slate-800 rounded-lg shadow-2xl border-2 border-indigo-500 flex items-center justify-center">
+                         <span className="text-slate-300 font-bold uppercase tracking-widest">Reordenando Faixa</span>
+                     </div>
+                 ) : (
+                     // Visual for Clip dragging
+                     <div 
+                        className={`p-2 rounded-lg border border-indigo-500/50 bg-slate-700 shadow-2xl z-50 ring-2 ring-indigo-500 flex items-center gap-2`}
+                        style={activeDragItem.type === 'TimelineClip' ? { 
+                            width: `${Math.max(40, ((activeDragItem.clip?.duration || 5) * pixelsPerSecond))}px`,
+                            height: '42px'
+                        } : {
+                            width: '240px',
+                            transform: 'rotate(3deg)'
+                        }}
+                     >
+                        <GripVertical className="w-4 h-4 text-slate-400" />
+                        <div className="flex-1 min-w-0 overflow-hidden">
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[10px] font-bold text-slate-200 truncate max-w-[120px] bg-slate-900/50 px-1.5 rounded">
+                                    {activeDragItem.clip?.voiceName}
+                                </span>
+                            </div>
+                            <p className="text-[10px] text-slate-400 truncate leading-tight opacity-80">
+                                "{activeDragItem.clip?.text}"
+                            </p>
                         </div>
-                        <p className="text-[10px] text-slate-400 truncate leading-tight opacity-80">
-                            "{activeDragItem.clip?.text}"
-                        </p>
                     </div>
-                </div>
+                 )
             ) : null}
         </DragOverlay>
 

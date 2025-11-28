@@ -44,6 +44,15 @@ export function useTimeline() {
       setTimeline(prev => prev.filter(clip => clip.trackId !== trackId));
   }, [tracks.length]);
 
+  // Reorder tracks
+  const moveTrack = useCallback((activeId: string, overId: string) => {
+      setTracks((items) => {
+          const oldIndex = items.indexOf(activeId);
+          const newIndex = items.indexOf(overId);
+          return arrayMove(items, oldIndex, newIndex);
+      });
+  }, []);
+
   const addClip = useCallback((clip: GeneratedClip, targetTrackId: string = 'track-1') => {
     const randomColor = COLORS[Math.floor(Math.random() * COLORS.length)];
     const newClip: TimelineClip = {
@@ -137,6 +146,7 @@ export function useTimeline() {
     removeClip,
     updateClip,
     moveClip,
+    moveTrack,
     clearTimeline,
     addTrack,
     removeTrack,
