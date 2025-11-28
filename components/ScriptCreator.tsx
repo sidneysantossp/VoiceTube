@@ -1,0 +1,529 @@
+import React, { useState } from 'react';
+import { GoogleGenAI, SchemaType, Type } from '@google/genai';
+import { 
+  BookOpen, 
+  Wand2, 
+  Users, 
+  ListOrdered, 
+  ArrowRight, 
+  Loader2, 
+  CheckCircle2, 
+  Edit3, 
+  FileText,
+  BrainCircuit,
+  Sparkles,
+  ChevronRight,
+  Target
+} from 'lucide-react';
+import { ScriptBlock } from '../types';
+
+// Safely access environment variables
+const env = (import.meta as any).env || {};
+const API_KEY = env.VITE_API_KEY;
+
+interface ScriptCreatorProps {
+  onExportScript: (blocks: ScriptBlock[]) => void;
+}
+
+// Data Structures for the "Architect" Phase
+interface Character {
+  name: string;
+  role: string;
+  traits: string;
+}
+
+interface StoryBeat {
+  act: string;
+  title: string;
+  description: string;
+}
+
+interface StoryStructure {
+  title: string;
+  logline: string;
+  characters: Character[];
+  outline: StoryBeat[];
+}
+
+export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Step 1: Inputs
+  const [premise, setPremise] = useState('');
+  const [genre, setGenre] = useState('YouTube Video');
+  const [tone, setTone] = useState('Informative');
+  const [targetAudience, setTargetAudience] = useState('General Audience');
+  const [temperature, setTemperature] = useState(0.7);
+
+  // Step 2: Architecture
+  const [structure, setStructure] = useState<StoryStructure | null>(null);
+
+  // Step 3: Final Script
+  const [generatedBlocks, setGeneratedBlocks] = useState<ScriptBlock[]>([]);
+
+  // --- AGENT 1: THE ARCHITECT ---
+  const handleGenerateStructure = async () => {
+    if (!premise.trim()) {
+        setError("Por favor, descreva sua ideia.");
+        return;
+    }
+    if (!API_KEY) {
+        setError("API Key não configurada.");
+        return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      
+      const prompt = `
+        Atue como um Arquiteto de Histórias Profissional (Story Architect).
+        
+        Analise a seguinte premissa e crie a estrutura narrativa.
+        Premissa: "${premise}"
+        Gênero: ${genre}
+        Tom: ${tone}
+        Público: ${targetAudience}
+
+        Gere um JSON com:
+        1. Um título cativante.
+        2. Uma Logline (resumo de 1 frase).
+        3. Lista de Personagens (se aplicável ao gênero, ou apresentadores).
+        4. Uma estrutura (Outline) dividida em batidas (Beats/Cenas).
+      `;
+
+      // Using JSON Schema for strict structural output
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+            systemInstruction: "Você é um especialista em estruturação de roteiros. Você organiza ideias caóticas em estruturas lógicas. Responda APENAS com JSON.",
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    title: { type: Type.STRING },
+                    logline: { type: Type.STRING },
+                    characters: {
+                        type: Type.ARRAY,
+                        items: {
+                            type: Type.OBJECT,
+                            properties: {
+                                name: { type: Type.STRING },
+                                role: { type: Type.STRING },
+                                traits: { type: Type.STRING }
+                            }
+                        }
+                    },
+                    outline: {
+                        type: Type.ARRAY,
+                        items: {
+                            type: Type.OBJECT,
+                            properties: {
+                                act: { type: Type.STRING, description: "Ex: Intro, Desenvolvimento, Clímax" },
+                                title: { type: Type.STRING },
+                                description: { type: Type.STRING }
+                            }
+                        }
+                    }
+                }
+            },
+            temperature: 0.5 // Lower temperature for structure logic
+        }
+      });
+
+      const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (jsonText) {
+          const parsed = JSON.parse(jsonText) as StoryStructure;
+          setStructure(parsed);
+          setStep(2);
+      } else {
+          throw new Error("Falha ao gerar JSON estruturado.");
+      }
+
+    } catch (err) {
+      console.error(err);
+      setError("Erro ao criar a estrutura. Tente simplificar a premissa.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // --- AGENT 2: THE WRITER ---
+  const handleWriteScript = async () => {
+    if (!structure || !API_KEY) return;
+
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+        const ai = new GoogleGenAI({ apiKey: API_KEY });
+        
+        // Construct context from the Architect's output
+        const structureContext = JSON.stringify(structure, null, 2);
+
+        const prompt = `
+            Atue como um Roteirista Sênior (Lead Writer).
+            
+            Use a estrutura aprovada abaixo para escrever o roteiro completo.
+            Separe o roteiro em blocos lógicos de texto (parágrafos ou falas).
+            Mantenha o tom ${tone}.
+            
+            ESTRUTURA APROVADA:
+            ${structureContext}
+
+            Instruções de Saída:
+            Gere um JSON contendo um array de blocos de texto. Cada bloco deve ser uma parte do roteiro pronta para ser falada (TTS).
+        `;
+
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [{ parts: [{ text: prompt }] }],
+            config: {
+                systemInstruction: "Você é um roteirista criativo. Escreva diálogos naturais e narrativas envolventes. Foque no conteúdo falado.",
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        blocks: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    text: { type: Type.STRING }
+                                }
+                            }
+                        }
+                    }
+                },
+                temperature: temperature // Use user-defined creativity
+            }
+        });
+
+        const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (jsonText) {
+            const parsed = JSON.parse(jsonText);
+            const scriptBlocks: ScriptBlock[] = parsed.blocks.map((b: any, index: number) => ({
+                id: `gen-script-${Date.now()}-${index}`,
+                text: b.text
+            }));
+            
+            setGeneratedBlocks(scriptBlocks);
+            setStep(3);
+        }
+
+    } catch (err) {
+        console.error(err);
+        setError("Erro ao escrever o roteiro.");
+    } finally {
+        setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full bg-slate-50">
+      
+      {/* Workflow Sidebar (Progress) */}
+      <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col gap-8">
+         <div>
+            <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-1">
+                <BrainCircuit className="w-5 h-5 text-indigo-600" />
+                Criador IA
+            </h2>
+            <p className="text-xs text-slate-500">Fluxo de Roteirização Profissional</p>
+         </div>
+
+         <div className="space-y-6 relative">
+            {/* Connecting Line */}
+            <div className="absolute left-3.5 top-2 bottom-2 w-0.5 bg-slate-100 z-0"></div>
+
+            {/* Steps */}
+            <div className={`relative z-10 flex items-start gap-3 ${step === 1 ? 'opacity-100' : 'opacity-50'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${step === 1 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>1</div>
+                <div>
+                    <h3 className="font-bold text-slate-700 text-sm">Conceito</h3>
+                    <p className="text-[10px] text-slate-500">Definição da ideia</p>
+                </div>
+            </div>
+
+            <div className={`relative z-10 flex items-start gap-3 ${step === 2 ? 'opacity-100' : 'opacity-50'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${step === 2 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>2</div>
+                <div>
+                    <h3 className="font-bold text-slate-700 text-sm">Arquitetura</h3>
+                    <p className="text-[10px] text-slate-500">Estrutura e Beats</p>
+                </div>
+            </div>
+
+            <div className={`relative z-10 flex items-start gap-3 ${step === 3 ? 'opacity-100' : 'opacity-50'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${step === 3 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>3</div>
+                <div>
+                    <h3 className="font-bold text-slate-700 text-sm">Roteiro</h3>
+                    <p className="text-[10px] text-slate-500">Edição Final</p>
+                </div>
+            </div>
+         </div>
+         
+         {step === 3 && (
+             <div className="mt-auto">
+                 <button 
+                    onClick={() => onExportScript(generatedBlocks)}
+                    className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-sm shadow-lg shadow-emerald-200 hover:bg-emerald-500 transition-all flex items-center justify-center gap-2"
+                 >
+                     <FileText className="w-4 h-4" />
+                     Exportar para Voz
+                 </button>
+             </div>
+         )}
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+         <div className="max-w-4xl mx-auto">
+            
+            {/* STEP 1: INPUTS */}
+            {step === 1 && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="text-center mb-8">
+                        <h1 className="text-3xl font-bold text-slate-800 mb-2">Qual é a sua ideia?</h1>
+                        <p className="text-slate-500">O Agente Arquiteto irá estruturar sua narrativa antes de escrevermos.</p>
+                    </div>
+
+                    <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 space-y-6">
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-2">Premissa / Ideia Central</label>
+                            <textarea
+                                value={premise}
+                                onChange={(e) => setPremise(e.target.value)}
+                                placeholder="Ex: Um documentário curto sobre a história do café, começando na Etiópia e terminando na Starbucks moderna..."
+                                className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none text-slate-700"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Formato / Gênero</label>
+                                <select 
+                                    value={genre}
+                                    onChange={(e) => setGenre(e.target.value)}
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                >
+                                    <option value="YouTube Video">Vídeo para YouTube</option>
+                                    <option value="Short Film">Curta Metragem</option>
+                                    <option value="Podcast">Podcast</option>
+                                    <option value="Advertisement">Comercial / Anúncio</option>
+                                    <option value="Tutorial">Tutorial Educativo</option>
+                                    <option value="Storytelling">Storytelling Narrativo</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Tom da Voz</label>
+                                <select 
+                                    value={tone}
+                                    onChange={(e) => setTone(e.target.value)}
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                >
+                                    <option value="Informative">Informativo & Sério</option>
+                                    <option value="Casual">Casual & Divertido</option>
+                                    <option value="Dramatic">Dramático & Emocional</option>
+                                    <option value="Energetic">Energético & Hype</option>
+                                    <option value="Professional">Corporativo & Profissional</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6">
+                             <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2">Público Alvo</label>
+                                <input
+                                    type="text"
+                                    value={targetAudience}
+                                    onChange={(e) => setTargetAudience(e.target.value)}
+                                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
+                                />
+                             </div>
+                             <div>
+                                <label className="block text-sm font-bold text-slate-700 mb-2 flex justify-between">
+                                    <span>Criatividade (Temperatura)</span>
+                                    <span className="text-indigo-600">{temperature}</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min="0.1"
+                                    max="1.0"
+                                    step="0.1"
+                                    value={temperature}
+                                    onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                                    <span>Preciso</span>
+                                    <span>Criativo</span>
+                                </div>
+                             </div>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end">
+                        <button
+                            onClick={handleGenerateStructure}
+                            disabled={isProcessing || !premise.trim()}
+                            className={`px-8 py-4 rounded-xl font-bold shadow-lg flex items-center gap-3 transition-all ${
+                                isProcessing 
+                                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200 transform hover:-translate-y-1'
+                            }`}
+                        >
+                            {isProcessing ? (
+                                <>
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                    O Arquiteto está pensando...
+                                </>
+                            ) : (
+                                <>
+                                    <Wand2 className="w-5 h-5" />
+                                    Gerar Estrutura
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 2: STRUCTURE REVIEW */}
+            {step === 2 && structure && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">Estrutura Aprovada?</h2>
+                            <p className="text-slate-500">Revise o plano criado pelo Arquiteto antes de escrever.</p>
+                        </div>
+                        <button onClick={() => setStep(1)} className="text-sm text-slate-400 hover:text-indigo-600 underline">
+                            Voltar e Editar
+                        </button>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                        <div className="bg-slate-50 p-6 border-b border-slate-200">
+                             <h3 className="text-xl font-bold text-slate-800">{structure.title}</h3>
+                             <p className="text-slate-600 italic mt-2">"{structure.logline}"</p>
+                        </div>
+                        
+                        <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8">
+                            {/* Characters Col */}
+                            <div className="md:col-span-1 space-y-4">
+                                <h4 className="font-bold text-slate-400 uppercase text-xs tracking-wider flex items-center gap-2">
+                                    <Users className="w-4 h-4" />
+                                    Personagens
+                                </h4>
+                                <div className="space-y-3">
+                                    {structure.characters.map((char, idx) => (
+                                        <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                            <div className="font-bold text-indigo-700 text-sm">{char.name}</div>
+                                            <div className="text-xs text-slate-500 font-medium">{char.role}</div>
+                                            <div className="text-xs text-slate-400 mt-1">{char.traits}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Outline Col */}
+                            <div className="md:col-span-2 space-y-4">
+                                <h4 className="font-bold text-slate-400 uppercase text-xs tracking-wider flex items-center gap-2">
+                                    <ListOrdered className="w-4 h-4" />
+                                    Beat Sheet (Escaleta)
+                                </h4>
+                                <div className="space-y-0 relative">
+                                    <div className="absolute left-4 top-4 bottom-4 w-0.5 bg-slate-200"></div>
+                                    {structure.outline.map((beat, idx) => (
+                                        <div key={idx} className="relative pl-10 pb-6 group">
+                                            <div className="absolute left-2.5 top-1.5 w-3 h-3 bg-indigo-500 rounded-full border-2 border-white shadow-sm z-10"></div>
+                                            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase">{beat.act}</span>
+                                                </div>
+                                                <h5 className="font-bold text-slate-800 mb-1">{beat.title}</h5>
+                                                <p className="text-sm text-slate-600 leading-relaxed">{beat.description}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end gap-4">
+                        <button
+                            onClick={handleWriteScript}
+                            disabled={isProcessing}
+                            className={`px-8 py-4 rounded-xl font-bold shadow-lg flex items-center gap-3 transition-all ${
+                                isProcessing 
+                                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200 transform hover:-translate-y-1'
+                            }`}
+                        >
+                             {isProcessing ? (
+                                <>
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                    Escrevendo Roteiro...
+                                </>
+                            ) : (
+                                <>
+                                    <Edit3 className="w-5 h-5" />
+                                    Aprovar & Escrever
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 3: FINAL OUTPUT */}
+            {step === 3 && (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4">
+                     <div className="text-center mb-8">
+                        <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 text-emerald-600">
+                            <CheckCircle2 className="w-8 h-8" />
+                        </div>
+                        <h2 className="text-3xl font-bold text-slate-800 mb-2">Roteiro Criado!</h2>
+                        <p className="text-slate-500">Seu roteiro foi gerado e separado em {generatedBlocks.length} blocos de fala.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4">
+                        {generatedBlocks.map((block, idx) => (
+                            <div key={block.id} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex gap-4">
+                                <div className="text-xs font-mono text-slate-400 w-6 pt-1">{idx + 1}</div>
+                                <p className="text-slate-700 leading-relaxed">{block.text}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="sticky bottom-6 flex justify-center">
+                         <button
+                            onClick={() => onExportScript(generatedBlocks)}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-10 py-4 rounded-full font-bold shadow-xl shadow-emerald-200/50 transform transition-all hover:scale-105 flex items-center gap-3"
+                         >
+                             <Sparkles className="w-5 h-5" />
+                             Enviar para Estúdio de Voz
+                             <ArrowRight className="w-5 h-5" />
+                         </button>
+                    </div>
+                </div>
+            )}
+            
+            {/* Error Toast */}
+            {error && (
+                <div className="fixed bottom-8 right-8 bg-red-100 border border-red-200 text-red-700 px-6 py-4 rounded-xl shadow-lg flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2">
+                    <Target className="w-5 h-5" />
+                    {error}
+                </div>
+            )}
+
+         </div>
+      </div>
+    </div>
+  );
+}

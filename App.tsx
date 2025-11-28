@@ -22,18 +22,22 @@ import {
   GripVertical,
   X,
   Scissors,
-  LogOut
+  LogOut,
+  BookOpen,
+  ShieldCheck,
+  KeyRound
 } from 'lucide-react';
-import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip } from './types';
+import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile } from './types';
 import { createWavBlob, base64ToArrayBuffer, processAudioBlob } from './utils/audioUtils';
 import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
+import ScriptCreator from './components/ScriptCreator';
+import AdminDashboard from './components/AdminDashboard';
 
 // --- ENVIRONMENT VARIABLES FIX ---
 // Safely access environment variables
 const env = (import.meta as any).env || {};
-const API_KEY = env.VITE_API_KEY;
 
 const DEFAULT_CONFIG = {
   temperature: 1.0,
@@ -46,13 +50,21 @@ const STORAGE_KEYS = {
   CONFIG: 'gemini_voice_model_config',
   VOICES: 'gemini_voice_custom_voices',
   HISTORY: 'gemini_voice_history_clips',
-  MERGED: 'gemini_voice_merged_clips'
+  MERGED: 'gemini_voice_merged_clips',
+  LOCAL_API_KEY: 'gemini_voice_user_api_key'
 };
 
 export default function App() {
   // --- AUTH STATE ---
   const [session, setSession] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  // --- API KEY STATE ---
+  // Priority: 1. Global DB Config (Admin set), 2. LocalStorage (User set), 3. Env Var
+  const [apiKey, setApiKey] = useState<string>('');
+  const [isGlobalKey, setIsGlobalKey] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
 
   useEffect(() => {
     // Check if we are handling a password reset or email confirmation link
@@ -60,8 +72,6 @@ export default function App() {
     const hash = window.location.hash;
     if (hash && hash.includes('access_token')) {
         setLoadingSession(true);
-        // Supabase client handles the token parsing automatically 
-        // We just wait a bit for the onAuthStateChange to fire
     }
 
     // Check active session
@@ -69,6 +79,7 @@ export default function App() {
       .then(({ data: { session } }) => {
         if (session) {
             setSession(session);
+            fetchUserProfile(session.user.id);
         }
         setLoadingSession(false);
       })
@@ -82,16 +93,77 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (session) {
+          fetchUserProfile(session.user.id);
+      } else {
+          setUserProfile(null);
+      }
       setLoadingSession(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch Role and Global Config
+  const fetchUserProfile = async (uid: string) => {
+      // 1. Get Profile (Role)
+      const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', uid)
+          .single();
+      
+      if (profile) {
+          setUserProfile(profile as UserProfile);
+      }
+
+      // 2. Try to fetch Global System Key (if defined in DB)
+      // This might fail if the user is NOT admin and RLS is strict, 
+      // but for "Public" usage we might want a specific policy or edge function.
+      // For this implementation, let's assume if it fails, we fallback to env/local.
+      // NOTE: In a real secure app, the backend would proxy calls. Since this is client-side,
+      // we expose the key to the client if we want them to use a "Global" key.
+      try {
+          // Attempt to fetch global key. 
+          // Note: RLS usually blocks this for non-admins unless we open a policy for reading 'gemini_api_key'
+          const { data: settings } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'gemini_api_key')
+            .single();
+
+          if (settings && settings.value) {
+              setApiKey(settings.value);
+              setIsGlobalKey(true);
+              return; // Found global, stop here
+          }
+      } catch (e) {
+          // Ignore RLS errors
+      }
+
+      // 3. Fallback: LocalStorage
+      const localKey = localStorage.getItem(STORAGE_KEYS.LOCAL_API_KEY);
+      if (localKey) {
+          setApiKey(localKey);
+          return;
+      }
+
+      // 4. Fallback: Env Var
+      if (env.VITE_API_KEY) {
+          setApiKey(env.VITE_API_KEY);
+      }
+  };
+
+  const updateLocalApiKey = (newKey: string) => {
+      setApiKey(newKey);
+      localStorage.setItem(STORAGE_KEYS.LOCAL_API_KEY, newKey);
+      setShowApiKeyModal(false);
+  };
+
   // --- APP STATE ---
 
   // Navigation State
-  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor'>('tts');
+  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'admin'>('tts');
 
   // State
   // Replace simple text string with Blocks system
@@ -309,6 +381,11 @@ export default function App() {
 
   // -------------------------
 
+  const handleImportScript = (newBlocks: ScriptBlock[]) => {
+      setBlocks(newBlocks);
+      setCurrentView('tts');
+  };
+
   const handleSaveVoice = (newVoice: VoiceOption) => {
       setVoices(prev => [...prev, newVoice]);
       setSelectedVoice(newVoice);
@@ -339,6 +416,7 @@ export default function App() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setSession(null); // Ensure state is cleared even for demo/mock sessions
+    setUserProfile(null);
   };
 
   const handleDemoLogin = () => {
@@ -361,15 +439,16 @@ export default function App() {
     const fullText = getFullText();
     if (!fullText.trim()) return;
     
-    if (!API_KEY) {
-      alert("API Key não encontrada! Por favor, configure a variável VITE_API_KEY no seu provedor (Vercel).");
+    if (!apiKey) {
+      alert("API Key não encontrada! Por favor, clique no ícone de chave no topo para configurar.");
+      setShowApiKeyModal(true);
       return;
     }
 
     setIsGenerating(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       let response;
 
       // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
@@ -493,8 +572,9 @@ export default function App() {
   const handlePreview = async (e: React.MouseEvent, voice: VoiceOption) => {
     e.stopPropagation(); // Prevent selecting the voice when clicking preview
 
-    if (!API_KEY) {
-         alert("API Key não encontrada! Configure VITE_API_KEY.");
+    if (!apiKey) {
+         alert("API Key não encontrada! Configure.");
+         setShowApiKeyModal(true);
          return;
     }
 
@@ -519,7 +599,7 @@ export default function App() {
     setIsPreviewLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       // Portuguese preview text
       const previewText = `Olá, eu sou a voz ${voice.name}. Testando o áudio em português.`;
       
@@ -675,6 +755,17 @@ export default function App() {
               Texto para Voz
             </button>
             <button 
+              onClick={() => setCurrentView('script-creator')}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                currentView === 'script-creator' 
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+              }`}
+            >
+              <BookOpen className="w-5 h-5" />
+              Criador de Roteiro
+            </button>
+            <button 
               onClick={() => setCurrentView('cloning')}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
                 currentView === 'cloning' 
@@ -696,16 +787,35 @@ export default function App() {
               <Scissors className="w-5 h-5" />
               Edição de Áudio
             </button>
+            
+            {/* ADMIN LINK (Conditionally Rendered) */}
+            {userProfile?.role === 'admin' && (
+                <button 
+                onClick={() => setCurrentView('admin')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all mt-4 border border-indigo-500/30 ${
+                    currentView === 'admin' 
+                    ? 'bg-indigo-900/50 text-indigo-200 shadow-md' 
+                    : 'text-indigo-400 hover:bg-slate-800 hover:text-indigo-300'
+                }`}
+                >
+                <ShieldCheck className="w-5 h-5" />
+                Admin Dashboard
+                </button>
+            )}
+
           </nav>
         </div>
         
         <div className="mt-auto p-4 border-t border-slate-800 space-y-3">
            <div className="bg-slate-800/50 rounded-xl p-3 border border-slate-700">
              <div className="flex items-center gap-2 mb-2">
-               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+               <div className={`w-2 h-2 rounded-full animate-pulse ${userProfile?.is_banned ? 'bg-red-500' : 'bg-green-500'}`}></div>
                <span className="text-xs font-medium text-slate-300 truncate w-32">{session.user.email}</span>
              </div>
-             <p className="text-[10px] text-slate-500">v1.5.0 • Editor Suite</p>
+             <p className="text-[10px] text-slate-500 flex justify-between">
+                <span>v1.6.0</span>
+                {userProfile?.role === 'admin' && <span className="text-indigo-400 font-bold">ADMIN</span>}
+             </p>
            </div>
            
            <button 
@@ -727,8 +837,26 @@ export default function App() {
             {currentView === 'tts' && 'Texto para Voz'}
             {currentView === 'cloning' && 'Clonagem de Voz'}
             {currentView === 'editor' && 'Edição de Áudio'}
+            {currentView === 'script-creator' && 'Criador de Roteiro (AI)'}
+            {currentView === 'admin' && 'Admin Dashboard'}
           </h1>
           <div className="flex items-center gap-4">
+             {/* API Key Manager */}
+             <button 
+                onClick={() => setShowApiKeyModal(true)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                    isGlobalKey 
+                    ? 'bg-purple-100 text-purple-700 border-purple-200 cursor-default'
+                    : apiKey 
+                        ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
+                        : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100 animate-pulse'
+                }`}
+                title={isGlobalKey ? "Chave Global do Sistema Ativa" : "Configurar sua API Key"}
+             >
+                <KeyRound className="w-3.5 h-3.5" />
+                {isGlobalKey ? 'Chave Global Ativa' : apiKey ? 'Chave Configurada' : 'Configurar Chave'}
+             </button>
+
              <div className="text-sm text-slate-500 font-medium bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div>
                 Powered by Gemini 2.5
@@ -739,7 +867,9 @@ export default function App() {
         {/* Scrollable Area */}
         <main className="flex-1 overflow-y-auto bg-slate-50/50">
           
-          {currentView === 'editor' ? (
+          {currentView === 'admin' && userProfile?.role === 'admin' ? (
+              <AdminDashboard />
+          ) : currentView === 'editor' ? (
               <AudioEditor 
                 sourceClips={history}
                 mergedHistory={mergedHistory}
@@ -750,6 +880,8 @@ export default function App() {
              <div className="p-6">
                 <VoiceCloning onSaveVoice={handleSaveVoice} />
              </div>
+          ) : currentView === 'script-creator' ? (
+             <ScriptCreator onExportScript={handleImportScript} />
           ) : (
              <div className="p-6 max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-12 gap-8 pb-10">
             
@@ -1171,7 +1303,7 @@ export default function App() {
                                className={`p-2 rounded-lg transition-colors ${
                                  downloadingClipId === clip.id 
                                    ? 'text-indigo-600 bg-indigo-50'
-                                   : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                                   : 'text-slate-400 hover:text-indigo-600 hover:text-indigo-600 hover:bg-indigo-50'
                                }`}
                                title="Baixar com configurações atuais"
                              >
@@ -1201,6 +1333,61 @@ export default function App() {
         </main>
       </div>
       
+      {/* API Key Modal */}
+      {showApiKeyModal && !isGlobalKey && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+                  <button 
+                    onClick={() => setShowApiKeyModal(false)}
+                    className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
+                  >
+                      <X className="w-5 h-5" />
+                  </button>
+                  
+                  <div className="flex items-center gap-3 mb-4">
+                      <div className="bg-indigo-100 p-2 rounded-lg">
+                          <KeyRound className="w-6 h-6 text-indigo-600" />
+                      </div>
+                      <h2 className="text-xl font-bold text-slate-800">Configurar API Key</h2>
+                  </div>
+                  
+                  <p className="text-slate-500 text-sm mb-4">
+                      Para usar a inteligência artificial, você precisa de uma chave API do Google Gemini.
+                      Esta chave será salva apenas no seu navegador.
+                  </p>
+
+                  <input 
+                    type="text" 
+                    placeholder="Cole sua API Key aqui (AIza...)"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    className="w-full p-3 border border-slate-300 rounded-xl mb-4 focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
+                  />
+
+                  <div className="flex justify-end gap-2">
+                      <button 
+                        onClick={() => setShowApiKeyModal(false)}
+                        className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg font-medium"
+                      >
+                          Cancelar
+                      </button>
+                      <button 
+                        onClick={() => updateLocalApiKey(apiKey)}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold"
+                      >
+                          Salvar Chave
+                      </button>
+                  </div>
+                  
+                  <div className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400 text-center">
+                      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-indigo-500 hover:underline">
+                          Obter chave no Google AI Studio
+                      </a>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* Hidden Audio Element for Playback */}
       <audio 
         ref={audioRef} 

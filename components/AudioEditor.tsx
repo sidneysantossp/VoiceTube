@@ -13,7 +13,9 @@ import {
   useSensors,
   DragStartEvent,
   DragEndEvent,
-  DragOverEvent
+  DragOverEvent,
+  defaultDropAnimationSideEffects,
+  DropAnimation
 } from '@dnd-kit/core';
 import { 
   Play, 
@@ -31,7 +33,8 @@ import {
   PlayCircle,
   StopCircle,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  GripVertical
 } from 'lucide-react';
 import { mixAudioTracks } from '../utils/audioUtils';
 
@@ -42,11 +45,24 @@ interface AudioEditorProps {
   onDeleteMerged: (id: string) => void;
 }
 
+const dropAnimation: DropAnimation = {
+  sideEffects: defaultDropAnimationSideEffects({
+    styles: {
+      active: {
+        opacity: '0.5',
+      },
+    },
+  }),
+};
+
 export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, onDeleteMerged }: AudioEditorProps) {
   const { timeline, tracks, addClip, removeClip, updateClip, moveClip, addTrack, removeTrack, getTotalDuration, previewMix } = useTimeline();
   const [isProcessing, setIsProcessing] = useState(false);
   const [playPreviewId, setPlayPreviewId] = useState<string | null>(null);
-  const [activeDragItem, setActiveDragItem] = useState<GeneratedClip | null>(null);
+  
+  // Track the actual object being dragged for the overlay
+  const [activeDragItem, setActiveDragItem] = useState<any>(null); // Type 'any' used to handle both SourceClip and TimelineClip wrappers
+  
   const [uploadedClips, setUploadedClips] = useState<GeneratedClip[]>([]);
   
   // Zoom State (Pixels per Second)
@@ -66,7 +82,7 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
   const sensors = useSensors(
     useSensor(PointerSensor, {
         activationConstraint: {
-            distance: 8,
+            distance: 5, // Require slight movement to start drag (prevents accidental clicks)
         },
     }),
     useSensor(KeyboardSensor)
@@ -99,13 +115,11 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
     
-    // Check if dragging from sidebar
-    if (active.data.current?.type === 'SourceClip') {
-        setActiveDragItem(active.data.current.clip);
-    } 
-    // Check if dragging from timeline
-    else if (active.data.current?.type === 'TimelineClip') {
-        setActiveDragItem(active.data.current.clip);
+    // Store the data of the active item for the overlay
+    // The data structure depends on DraggableSidebarItem ({ type: 'SourceClip', clip }) 
+    // or TimelineClipItem ({ type: 'TimelineClip', clip })
+    if (active.data.current) {
+        setActiveDragItem(active.data.current);
     }
   };
 
@@ -113,7 +127,8 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     const { active, over } = event;
     if (!over) return;
 
-    // Only handle sorting for TimelineClips (both same-track and cross-track)
+    // Only handle real-time sorting for TimelineClips (both same-track and cross-track)
+    // SourceClips (from sidebar) are handled in DragEnd to avoid complex insertion logic during drag
     if (active.data.current?.type !== 'TimelineClip') return;
 
     const activeId = active.id;
@@ -127,13 +142,15 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     const overClip = timeline.find(c => c.instanceId === overId);
     const isOverTrack = tracks.includes(overId as string);
 
-    // Case 1: Over another clip (Sort)
+    // Case 1: Dragging over another CLIP (Sorting/Reordering)
     if (overClip) {
-        // We call moveClip for both same-track and cross-track to ensure real-time visual sorting
+        // We call moveClip for both same-track and cross-track sorting
+        // This visualizes the swap immediately
         moveClip(activeId as string, overId as string);
     } 
-    // Case 2: Over an empty track container (Move to Track)
+    // Case 2: Dragging over an EMPTY TRACK AREA (Moving to Track)
     else if (isOverTrack) {
+        // Only trigger update if we are actually moving to a NEW track
         if (activeClip.trackId !== overId) {
              moveClip(activeId as string, overId as string, overId as string);
         }
@@ -156,9 +173,11 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
         // Is dropping on a clip inside a track?
         const isClipDrop = timeline.some(t => t.instanceId === overId);
         
-        let targetTrack = 'track-1';
-        if (isTrackDrop) targetTrack = overId as string;
-        else if (isClipDrop) {
+        let targetTrack = tracks[0] || 'track-1'; // Default fallback
+        
+        if (isTrackDrop) {
+            targetTrack = overId as string;
+        } else if (isClipDrop) {
             const clip = timeline.find(t => t.instanceId === overId);
             if (clip) targetTrack = clip.trackId;
         }
@@ -168,8 +187,8 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
             addClip(clipToAdd, targetTrack);
         }
     } 
-    // 2. TimelineClip moves
-    // handleDragOver usually handles the visual move, but we enforce consistency here
+    // 2. TimelineClip moves are mostly handled by DragOver (sorting), 
+    // but we add a safety check here to ensure final placement logic is sound
     else if (active.data.current?.type === 'TimelineClip') {
         const isTrackDrop = tracks.includes(overId as string);
         
@@ -354,6 +373,7 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
         onDragStart={handleDragStart} 
         onDragEnd={handleDragEnd}
         onDragOver={handleDragOver}
+        dropAnimation={dropAnimation}
     >
         <div className="flex-1 flex flex-col xl:flex-row h-[calc(100vh-4rem)] overflow-hidden bg-slate-50">
         
@@ -624,17 +644,29 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
         </div>
 
         {/* Drag Overlay (Visual Follower) */}
-        <DragOverlay className="pointer-events-none">
+        <DragOverlay className="pointer-events-none" dropAnimation={dropAnimation}>
             {activeDragItem ? (
-                 <div className="p-2 rounded-lg bg-slate-800 text-white shadow-2xl border border-indigo-500 rotate-2 opacity-90 w-40 ring-2 ring-indigo-400 z-50">
-                    <div className="flex justify-between gap-2 mb-1">
-                        <span className="text-[9px] font-bold text-white bg-indigo-600 px-1.5 rounded-full uppercase truncate">
-                            {activeDragItem.voiceName}
-                        </span>
+                 <div 
+                    className={`p-2 rounded-lg border border-indigo-500/50 bg-slate-700 shadow-2xl z-50 ring-2 ring-indigo-500 flex items-center gap-2`}
+                    style={activeDragItem.type === 'TimelineClip' ? { 
+                        width: `${Math.max(40, ((activeDragItem.clip?.duration || 5) * pixelsPerSecond))}px`,
+                        height: '42px'
+                    } : {
+                        width: '240px',
+                        transform: 'rotate(3deg)'
+                    }}
+                 >
+                    <GripVertical className="w-4 h-4 text-slate-400" />
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                        <div className="flex items-center gap-2 mb-1">
+                            <span className="text-[10px] font-bold text-slate-200 truncate max-w-[120px] bg-slate-900/50 px-1.5 rounded">
+                                {activeDragItem.clip?.voiceName}
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 truncate leading-tight opacity-80">
+                            "{activeDragItem.clip?.text}"
+                        </p>
                     </div>
-                    <p className="text-[10px] text-slate-200 line-clamp-1 italic">
-                        "{activeDragItem.text}"
-                    </p>
                 </div>
             ) : null}
         </DragOverlay>

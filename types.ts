@@ -40,6 +40,21 @@ export interface ScriptBlock {
   text: string;
 }
 
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name?: string;
+  role: 'user' | 'admin';
+  is_banned?: boolean;
+  created_at: string;
+}
+
+export interface SystemSetting {
+  key: string;
+  value: string;
+  description: string;
+}
+
 export const INITIAL_VOICES: VoiceOption[] = [
   {
     id: 'Puck',
