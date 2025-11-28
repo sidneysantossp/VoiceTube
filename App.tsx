@@ -357,37 +357,11 @@ export default function App() {
 
   // BLOCK SYSTEM LOGIC
   const updateBlock = (id: string, newText: string) => {
-    // Check for double newline to auto-split
-    if (newText.includes('\n\n')) {
-        const splitContent = newText.split(/\n\s*\n/); // Split by empty lines
-        
-        // Filter out accidental empty splits if necessary, but keep structure
-        const validSegments = splitContent; 
-
-        if (validSegments.length > 1) {
-            setBlocks(prev => {
-                const index = prev.findIndex(b => b.id === id);
-                if (index === -1) return prev;
-
-                const newBlocks = validSegments.map((segment, i) => ({
-                    id: i === 0 ? id : `split-${Date.now()}-${i}`,
-                    text: segment
-                }));
-
-                const before = prev.slice(0, index);
-                const after = prev.slice(index + 1);
-                
-                return [...before, ...newBlocks, ...after];
-            });
-            return;
-        }
-    }
-
     setBlocks(prev => prev.map(b => b.id === id ? { ...b, text: newText } : b));
   };
 
   const addBlock = (index?: number) => {
-    const newBlock = { id: `block-${Date.now()}`, text: '' };
+    const newBlock = { id: `block-${Date.now()}-${Math.random()}`, text: '' };
     if (index === undefined) {
         setBlocks(prev => [...prev, newBlock]);
     } else {
@@ -405,6 +379,63 @@ export default function App() {
         return;
     }
     setBlocks(prev => prev.filter(b => b.id !== id));
+  };
+
+  // Handle Paste: Automatically split pasted text into blocks
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>, blockId: string, index: number) => {
+    const pastedData = e.clipboardData.getData('Text');
+    
+    // If paste contains newlines, treat them as separate blocks
+    if (pastedData.includes('\n')) {
+        e.preventDefault();
+        
+        // Split by lines and remove empty ones to keep it clean
+        const lines = pastedData.split('\n').map(line => line.trim()).filter(line => line !== '');
+
+        if (lines.length > 0) {
+            setBlocks(prev => {
+                const newBlocks = lines.map((line, i) => ({
+                    id: i === 0 ? blockId : `pasted-${Date.now()}-${i}-${Math.random()}`,
+                    text: line
+                }));
+
+                // Combine: blocks before + new blocks from paste + blocks after
+                // Note: The first pasted line replaces the content of the current block to behave like "insert" at root
+                // For smoother UX, we could try to append to current cursor, but replacing/filling empty blocks is safer for structure
+                
+                // If current block has text, we might want to keep it? 
+                // Simple version: Insert all lines starting at current position
+                
+                const before = prev.slice(0, index);
+                const after = prev.slice(index + 1);
+                
+                // If current block was empty, overwrite it. If it had text, maybe append?
+                // Implementation: The first line of pasted text takes the ID of the current block
+                const firstBlock = { id: blockId, text: lines[0] };
+                const restBlocks = lines.slice(1).map((line, i) => ({
+                    id: `pasted-${Date.now()}-${i}-${Math.random()}`,
+                    text: line
+                }));
+
+                return [...before, firstBlock, ...restBlocks, ...after];
+            });
+        }
+    }
+  };
+
+  // Handle Key Down: Enter to add block, Backspace to delete empty block
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, id: string, index: number) => {
+      // Enter without Shift = New Block
+      if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          addBlock(index);
+          // Focus logic is implicit as user usually types continuously
+      }
+      // Backspace on empty block = Delete Block
+      if (e.key === 'Backspace' && blocks[index].text === '' && blocks.length > 1) {
+          e.preventDefault();
+          removeBlock(id);
+      }
   };
 
   const clearAllBlocks = () => {
@@ -979,6 +1010,8 @@ export default function App() {
                                 <textarea
                                     value={block.text}
                                     onChange={(e) => updateBlock(block.id, e.target.value)}
+                                    onPaste={(e) => handlePaste(e, block.id, index)}
+                                    onKeyDown={(e) => handleKeyDown(e, block.id, index)}
                                     placeholder={`Bloco ${index + 1}: Digite ou cole seu texto aqui...`}
                                     className="w-full bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 focus:border-indigo-500/50 rounded-xl p-4 text-slate-200 placeholder-slate-600 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition-all text-base leading-relaxed min-h-[100px]"
                                     style={{
