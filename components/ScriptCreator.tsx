@@ -17,12 +17,9 @@ import {
 } from 'lucide-react';
 import { ScriptBlock } from '../types';
 
-// Safely access environment variables
-const env = (import.meta as any).env || {};
-const API_KEY = env.VITE_API_KEY;
-
 interface ScriptCreatorProps {
   onExportScript: (blocks: ScriptBlock[]) => void;
+  apiKey: string;
 }
 
 // Data Structures for the "Architect" Phase
@@ -45,7 +42,7 @@ interface StoryStructure {
   outline: StoryBeat[];
 }
 
-export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
+export default function ScriptCreator({ onExportScript, apiKey }: ScriptCreatorProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,14 +60,26 @@ export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
   // Step 3: Final Script
   const [generatedBlocks, setGeneratedBlocks] = useState<ScriptBlock[]>([]);
 
+  // Helper to strip markdown (```json ... ```) and handle incomplete JSON slightly better
+  const cleanAndParseJSON = (text: string) => {
+      // Remove Markdown code blocks
+      let cleaned = text.replace(/```json\n?|```/g, '').trim();
+      try {
+          return JSON.parse(cleaned);
+      } catch (e) {
+          console.error("JSON Parse Error. Raw Text:", text);
+          throw new Error("A IA gerou uma resposta inválida ou incompleta. Tente simplificar.");
+      }
+  };
+
   // --- AGENT 1: THE ARCHITECT ---
   const handleGenerateStructure = async () => {
     if (!premise.trim()) {
         setError("Por favor, descreva sua ideia.");
         return;
     }
-    if (!API_KEY) {
-        setError("API Key não configurada.");
+    if (!apiKey) {
+        setError("API Key não configurada. Configure no menu superior.");
         return;
     }
 
@@ -78,7 +87,7 @@ export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
     setError(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: API_KEY });
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       
       const prompt = `
         Atue como um Arquiteto de Histórias Profissional (Story Architect).
@@ -132,22 +141,23 @@ export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
                     }
                 }
             },
-            temperature: 0.5 // Lower temperature for structure logic
+            temperature: 0.5, // Lower temperature for structure logic
+            maxOutputTokens: 4096 // Ensure enough room for structure
         }
       });
 
       const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
       if (jsonText) {
-          const parsed = JSON.parse(jsonText) as StoryStructure;
+          const parsed = cleanAndParseJSON(jsonText) as StoryStructure;
           setStructure(parsed);
           setStep(2);
       } else {
           throw new Error("Falha ao gerar JSON estruturado.");
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Erro ao criar a estrutura. Tente simplificar a premissa.");
+      setError(err.message || "Erro ao criar a estrutura. Tente simplificar a premissa.");
     } finally {
       setIsProcessing(false);
     }
@@ -155,13 +165,13 @@ export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
 
   // --- AGENT 2: THE WRITER ---
   const handleWriteScript = async () => {
-    if (!structure || !API_KEY) return;
+    if (!structure || !apiKey) return;
 
     setIsProcessing(true);
     setError(null);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: API_KEY });
+        const ai = new GoogleGenAI({ apiKey: apiKey });
         
         // Construct context from the Architect's output
         const structureContext = JSON.stringify(structure, null, 2);
@@ -200,25 +210,31 @@ export default function ScriptCreator({ onExportScript }: ScriptCreatorProps) {
                         }
                     }
                 },
-                temperature: temperature // Use user-defined creativity
+                temperature: temperature, // Use user-defined creativity
+                maxOutputTokens: 8192 // HIGH LIMIT to prevent "Unterminated string" on long scripts
             }
         });
 
         const jsonText = response.candidates?.[0]?.content?.parts?.[0]?.text;
         if (jsonText) {
-            const parsed = JSON.parse(jsonText);
-            const scriptBlocks: ScriptBlock[] = parsed.blocks.map((b: any, index: number) => ({
-                id: `gen-script-${Date.now()}-${index}`,
-                text: b.text
-            }));
+            const parsed = cleanAndParseJSON(jsonText);
             
-            setGeneratedBlocks(scriptBlocks);
-            setStep(3);
+            if (parsed && Array.isArray(parsed.blocks)) {
+                const scriptBlocks: ScriptBlock[] = parsed.blocks.map((b: any, index: number) => ({
+                    id: `gen-script-${Date.now()}-${index}`,
+                    text: b.text
+                }));
+                
+                setGeneratedBlocks(scriptBlocks);
+                setStep(3);
+            } else {
+                throw new Error("Formato de resposta inválido.");
+            }
         }
 
-    } catch (err) {
+    } catch (err: any) {
         console.error(err);
-        setError("Erro ao escrever o roteiro.");
+        setError(err.message || "Erro ao escrever o roteiro.");
     } finally {
         setIsProcessing(false);
     }

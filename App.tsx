@@ -213,10 +213,11 @@ export default function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.VOICES);
       if (saved) {
-        return JSON.parse(saved);
+        return JSON.parse(saved) || [];
       }
     } catch (e) {
-      console.error("Failed to load voices", e);
+      console.error("Failed to load voices from storage (corrupted). Resetting.", e);
+      localStorage.removeItem(STORAGE_KEYS.VOICES); // Self-healing
     }
     return INITIAL_VOICES;
   });
@@ -229,10 +230,11 @@ export default function App() {
         return JSON.parse(saved, (key, value) => {
            if (key === 'createdAt') return new Date(value);
            return value;
-        });
+        }) || [];
       }
     } catch (e) {
-      console.error("Failed to load history", e);
+      console.error("Failed to load history from storage (corrupted). Resetting.", e);
+      localStorage.removeItem(STORAGE_KEYS.HISTORY); // Self-healing
     }
     return [];
   });
@@ -245,10 +247,11 @@ export default function App() {
         return JSON.parse(saved, (key, value) => {
            if (key === 'createdAt') return new Date(value);
            return value;
-        });
+        }) || [];
       }
     } catch (e) {
-      console.error("Failed to load merged history", e);
+      console.error("Failed to load merged history from storage. Resetting.", e);
+      localStorage.removeItem(STORAGE_KEYS.MERGED); // Self-healing
     }
     return [];
   });
@@ -262,11 +265,12 @@ export default function App() {
       }
     } catch (e) {
       console.warn("Failed to parse saved config from localStorage", e);
+      localStorage.removeItem(STORAGE_KEYS.CONFIG);
     }
     return DEFAULT_CONFIG;
   });
 
-  const [selectedVoice, setSelectedVoice] = useState<VoiceOption>(voices[0]);
+  const [selectedVoice, setSelectedVoice] = useState<VoiceOption>(voices[0] || INITIAL_VOICES[0]);
   const [isVoiceDropdownOpen, setIsVoiceDropdownOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   
@@ -385,37 +389,50 @@ export default function App() {
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>, blockId: string, index: number) => {
     const pastedData = e.clipboardData.getData('Text');
     
-    // If paste contains newlines, treat them as separate blocks
-    if (pastedData.includes('\n')) {
+    if (!pastedData) return;
+
+    // Normalize newlines to \n
+    const normalizedData = pastedData.replace(/\r\n/g, '\n');
+
+    // Only intervene if there are newlines
+    if (normalizedData.includes('\n')) {
         e.preventDefault();
         
-        // Split by lines and remove empty ones to keep it clean
-        const lines = pastedData.split('\n').map(line => line.trim()).filter(line => line !== '');
+        let segments: string[] = [];
+
+        // STRATEGY: 
+        // 1. Try splitting by DOUBLE newlines first (Paragraphs). 
+        //    Regex /\n\s*\n/ handles \n\n, \n \n, etc.
+        const paragraphs = normalizedData.split(/\n\s*\n/);
+
+        // 2. If we found multiple paragraphs, use them.
+        //    Any single \n inside a paragraph will remain part of that block.
+        if (paragraphs.length > 1) {
+            segments = paragraphs;
+        } 
+        // 3. Fallback: If no double newlines, split by single newlines (List items)
+        else {
+            segments = normalizedData.split('\n');
+        }
+
+        // Clean up empty lines
+        const lines = segments
+            .map(line => line.trim())
+            .filter(line => line !== '');
 
         if (lines.length > 0) {
             setBlocks(prev => {
-                const newBlocks = lines.map((line, i) => ({
-                    id: i === 0 ? blockId : `pasted-${Date.now()}-${i}-${Math.random()}`,
-                    text: line
-                }));
-
-                // Combine: blocks before + new blocks from paste + blocks after
-                // Note: The first pasted line replaces the content of the current block to behave like "insert" at root
-                // For smoother UX, we could try to append to current cursor, but replacing/filling empty blocks is safer for structure
-                
-                // If current block has text, we might want to keep it? 
-                // Simple version: Insert all lines starting at current position
-                
-                const before = prev.slice(0, index);
-                const after = prev.slice(index + 1);
-                
-                // If current block was empty, overwrite it. If it had text, maybe append?
-                // Implementation: The first line of pasted text takes the ID of the current block
+                // The first pasted line replaces/fills the current block
                 const firstBlock = { id: blockId, text: lines[0] };
+                
+                // The rest become new blocks
                 const restBlocks = lines.slice(1).map((line, i) => ({
                     id: `pasted-${Date.now()}-${i}-${Math.random()}`,
                     text: line
                 }));
+
+                const before = prev.slice(0, index);
+                const after = prev.slice(index + 1);
 
                 return [...before, firstBlock, ...restBlocks, ...after];
             });
@@ -971,10 +988,10 @@ export default function App() {
               />
           ) : currentView === 'cloning' ? (
              <div className="p-6">
-                <VoiceCloning onSaveVoice={handleSaveVoice} />
+                <VoiceCloning onSaveVoice={handleSaveVoice} apiKey={apiKey} />
              </div>
           ) : currentView === 'script-creator' ? (
-             <ScriptCreator onExportScript={handleImportScript} />
+             <ScriptCreator onExportScript={handleImportScript} apiKey={apiKey} />
           ) : (
              <div className="p-6 max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-12 gap-8 pb-10">
             
@@ -1120,6 +1137,14 @@ export default function App() {
                             <div>
                                 <div className="font-bold text-slate-800 text-sm flex items-center gap-2">
                                   {selectedVoice.name}
+                                  {/* Gender Badge */}
+                                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full border uppercase ${
+                                      selectedVoice.gender === 'Male' 
+                                      ? 'bg-blue-50 text-blue-600 border-blue-100' 
+                                      : 'bg-pink-50 text-pink-600 border-pink-100'
+                                  }`}>
+                                      {selectedVoice.gender === 'Male' ? 'Masculino' : 'Feminino'}
+                                  </span>
                                   {selectedVoice.isCustom && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 rounded-full border border-indigo-200">Custom</span>}
                                 </div>
                                 <div className="text-xs text-slate-500 truncate max-w-[150px] sm:max-w-xs">{selectedVoice.description}</div>
@@ -1163,6 +1188,14 @@ export default function App() {
                                             <div className="flex items-center gap-2">
                                                 <span className={`font-bold text-sm ${selectedVoice.id === voice.id ? 'text-indigo-700' : 'text-slate-800'}`}>
                                                     {voice.name}
+                                                </span>
+                                                {/* Gender Badge */}
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded-full border uppercase ${
+                                                    voice.gender === 'Male' 
+                                                    ? 'bg-blue-50 text-blue-600 border-blue-100' 
+                                                    : 'bg-pink-50 text-pink-600 border-pink-100'
+                                                }`}>
+                                                    {voice.gender === 'Male' ? 'Masculino' : 'Feminino'}
                                                 </span>
                                                 {selectedVoice.id === voice.id && <Check className="w-3.5 h-3.5 text-indigo-600" />}
                                                 {voice.isCustom && <span className="text-[9px] bg-slate-100 text-slate-500 px-1 rounded border border-slate-200">CLONADA</span>}

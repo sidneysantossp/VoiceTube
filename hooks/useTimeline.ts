@@ -18,10 +18,11 @@ export function useTimeline() {
         return JSON.parse(saved, (key, value) => {
           if (key === 'createdAt') return new Date(value);
           return value;
-        });
+        }) || [];
       }
     } catch (e) {
-      console.error("Failed to load timeline", e);
+      console.error("Failed to load timeline from storage. Resetting.", e);
+      localStorage.removeItem('gemini_voice_timeline_v3');
     }
     return [];
   });

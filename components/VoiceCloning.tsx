@@ -4,15 +4,12 @@ import { VoiceOption } from '../types';
 import { blobToBase64, base64ToArrayBuffer, createWavBlob } from '../utils/audioUtils';
 import { GoogleGenAI, Modality } from '@google/genai';
 
-// Safely access environment variables
-const env = (import.meta as any).env || {};
-const API_KEY = env.VITE_API_KEY;
-
 interface VoiceCloningProps {
   onSaveVoice: (voice: VoiceOption) => void;
+  apiKey: string;
 }
 
-export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
+export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps) {
   const [mode, setMode] = useState<'record' | 'upload'>('record');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -178,8 +175,8 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
   };
 
   const handleTestClone = async () => {
-      if (!createdVoice || !createdVoice.base64Audio || !API_KEY) {
-          setError("Configuração inválida para teste.");
+      if (!createdVoice || !createdVoice.base64Audio || !apiKey) {
+          setError("Configuração inválida ou API Key faltante. Configure no menu superior.");
           return;
       }
 
@@ -190,7 +187,7 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
       }
 
       try {
-          const ai = new GoogleGenAI({ apiKey: API_KEY });
+          const ai = new GoogleGenAI({ apiKey: apiKey });
           const previewText = `Olá! Esta é uma demonstração da voz clonada de ${createdVoice.name}.`;
 
           const response = await ai.models.generateContent({
@@ -237,7 +234,7 @@ export default function VoiceCloning({ onSaveVoice }: VoiceCloningProps) {
 
       } catch (e) {
           console.error("Test failed", e);
-          setError("Falha ao gerar preview da voz. Tente novamente.");
+          setError("Falha ao gerar preview da voz. Verifique a API Key.");
       } finally {
           setIsTesting(false);
       }
