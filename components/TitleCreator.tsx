@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserIntegrations } from '../types';
 import { GoogleGenAI } from '@google/genai';
+import { supabase } from '../lib/supabase';
 import { 
   LayoutTemplate, 
   Sparkles, 
@@ -18,7 +19,8 @@ import {
   Edit,
   FolderOpen,
   Calendar,
-  Search
+  Search,
+  CheckCircle2
 } from 'lucide-react';
 
 interface TitleCreatorProps {
@@ -54,8 +56,9 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
   const [isGenerating, setIsGenerating] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Persistence State
+  // Persistence State (Hybrid: Supabase + LocalStorage Fallback)
   const [projects, setProjects] = useState<SEOProject[]>(() => {
       try {
           const saved = localStorage.getItem('voice_tube_seo_projects');
@@ -65,36 +68,114 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
       }
   });
 
+  // Load from Supabase on Mount
+  useEffect(() => {
+      const fetchProjects = async () => {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+              const { data, error } = await supabase
+                  .from('seo_projects')
+                  .select('*')
+                  .eq('user_id', user.id)
+                  .order('updated_at', { ascending: false });
+              
+              if (data && !error) {
+                  const mapped: SEOProject[] = data.map(p => ({
+                      id: p.id,
+                      title: p.title,
+                      description: p.description,
+                      tags: p.tags || [],
+                      updatedAt: p.updated_at
+                  }));
+                  setProjects(mapped);
+              }
+          }
+      };
+      fetchProjects();
+  }, []);
+
+  // Sync to LocalStorage (Backup)
   useEffect(() => {
       localStorage.setItem('voice_tube_seo_projects', JSON.stringify(projects));
   }, [projects]);
 
   // --- PROJECT MANAGEMENT ---
 
-  const handleSaveProject = () => {
+  const handleSaveProject = async () => {
       if (!title.trim()) {
           alert("O projeto precisa ter pelo menos um título.");
           return;
       }
 
-      const newProject: SEOProject = {
-          id: currentProjectId || `seo-${Date.now()}`,
+      // 1. Get User
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const newProjectData = {
           title,
           description,
           tags,
-          updatedAt: new Date().toISOString()
+          updated_at: new Date().toISOString()
       };
 
-      setProjects(prev => {
-          const exists = prev.find(p => p.id === newProject.id);
-          if (exists) {
-              return prev.map(p => p.id === newProject.id ? newProject : p);
-          }
-          return [newProject, ...prev];
-      });
+      try {
+          let savedId = currentProjectId;
 
-      setCurrentProjectId(newProject.id);
-      alert("Projeto salvo com sucesso!");
+          // Try Saving to Supabase
+          if (user) {
+              if (currentProjectId && !currentProjectId.startsWith('local-')) {
+                  // Update
+                  const { error } = await supabase
+                      .from('seo_projects')
+                      .update(newProjectData)
+                      .eq('id', currentProjectId);
+                  if (error) throw error;
+              } else {
+                  // Insert
+                  const { data, error } = await supabase
+                      .from('seo_projects')
+                      .insert({
+                          user_id: user.id,
+                          created_at: new Date().toISOString(),
+                          ...newProjectData
+                      })
+                      .select()
+                      .single();
+                  
+                  if (error) throw error;
+                  savedId = data.id;
+              }
+          } else {
+              // Offline/Local Mode
+              savedId = currentProjectId || `local-${Date.now()}`;
+          }
+
+          // Update Local State
+          const newProject: SEOProject = {
+              id: savedId!,
+              title,
+              description,
+              tags,
+              updatedAt: new Date().toISOString()
+          };
+
+          setProjects(prev => {
+              const exists = prev.find(p => p.id === newProject.id);
+              if (exists) {
+                  return prev.map(p => p.id === newProject.id ? newProject : p);
+              }
+              return [newProject, ...prev];
+          });
+
+          setCurrentProjectId(newProject.id);
+          
+          // Show Success Toast
+          setSuccessMessage("Projeto salvo com sucesso!");
+          setTimeout(() => setSuccessMessage(null), 3000);
+
+      } catch (err) {
+          console.error("Erro ao salvar:", err);
+          alert("Erro ao salvar no banco de dados. Salvando localmente.");
+      }
   };
 
   const handleNewProject = () => {
@@ -114,9 +195,14 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
       setActiveTab('editor');
   };
 
-  const handleDeleteProject = (e: React.MouseEvent, id: string) => {
+  const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       if (confirm("Tem certeza que deseja excluir este projeto?")) {
+          // Delete from Supabase
+          if (!id.startsWith('local-')) {
+              await supabase.from('seo_projects').delete().eq('id', id);
+          }
+          
           setProjects(prev => prev.filter(p => p.id !== id));
           if (currentProjectId === id) {
               handleNewProject();
@@ -182,7 +268,11 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
           Título Rascunho: "${title}"
           Descrição: "${description}"
           
-          Retorne APENAS uma lista simples separada por quebras de linha.`;
+          REGRAS:
+          1. Retorne APENAS uma lista simples separada por quebras de linha.
+          2. NÃO numere a lista.
+          3. NÃO use aspas.
+          4. NÃO inclua textos introdutórios como "Aqui estão".`;
           
           const result = await callAI("Especialista em SEO para YouTube.", prompt);
           const titleList = result.split('\n')
@@ -205,11 +295,26 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
       }
       setIsGenerating('desc');
       try {
-          const prompt = `Escreva uma descrição otimizada para YouTube para o vídeo: "${title}".
-          Inclua gancho, resumo e CTA.`;
+          const prompt = `Escreva uma descrição completa e otimizada para YouTube para o vídeo: "${title}".
           
-          const result = await callAI("Especialista em SEO para YouTube.", prompt);
-          setSuggestions({ type: 'description', content: result });
+          REGRAS OBRIGATÓRIAS DE SAÍDA:
+          1. Retorne APENAS o corpo do texto da descrição. NADA MAIS.
+          2. NÃO comece com "Claro", "Com certeza", "Aqui está". Comece direto no Gancho.
+          3. NÃO use formatação Markdown (sem negrito ** ou itálico *), pois o YouTube não suporta. Use CAIXA ALTA para destaques.
+          4. Inclua: Gancho forte nas primeiras linhas, Resumo do conteúdo, CTA (Chamada para ação) e Links sugeridos (placeholders).`;
+          
+          const result = await callAI("Especialista em SEO para YouTube. Você é uma máquina que cospe texto puro.", prompt);
+          
+          // Post-processing cleanup just in case
+          let cleanText = result
+            .replace(/^Com certeza[\s\S]*?(\n\n|$)/i, '')
+            .replace(/^Aqui está[\s\S]*?(\n\n|$)/i, '')
+            .replace(/^Claro[\s\S]*?(\n\n|$)/i, '')
+            .replace(/\*\*/g, '') // Remove bold markdown
+            .replace(/__/g, '') // Remove italic markdown
+            .trim();
+
+          setSuggestions({ type: 'description', content: cleanText });
       } catch (e) {
           console.error(e);
       } finally {
@@ -224,7 +329,7 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
       }
       setIsGenerating('tags');
       try {
-          const prompt = `Gere 15 tags de cauda longa separadas por vírgula para: "${title}".`;
+          const prompt = `Gere 15 tags de cauda longa separadas por vírgula para: "${title}". APENAS AS TAGS.`;
           const result = await callAI("Especialista em SEO.", prompt);
           const tagList = result.split(',').map(t => t.trim()).filter(t => t);
           setSuggestions({ type: 'tags', content: tagList });
@@ -284,7 +389,7 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-50 p-6 md:p-8 flex flex-col min-h-full">
+    <div className="flex-1 overflow-y-auto bg-slate-50 p-6 md:p-8 flex flex-col min-h-full relative">
       <div className="max-w-6xl mx-auto w-full space-y-6 flex-1 flex flex-col">
         
         {/* Header & Tabs */}
@@ -488,7 +593,7 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
 
                                 {suggestions.type === 'description' && typeof suggestions.content === 'string' && (
                                     <div>
-                                        <p className="text-sm text-slate-600 leading-relaxed mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100 max-h-60 overflow-y-auto custom-scrollbar">
+                                        <p className="text-sm text-slate-600 leading-relaxed mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100 max-h-60 overflow-y-auto custom-scrollbar whitespace-pre-wrap">
                                             {suggestions.content}
                                         </p>
                                         <button 
@@ -556,48 +661,35 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
                         </button>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="flex flex-col gap-4">
                         {projects.map((project) => (
-                            <div key={project.id} className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-md transition-all group flex flex-col">
-                                <div className="flex justify-between items-start mb-2">
-                                    <h3 className="font-bold text-slate-800 line-clamp-2 leading-tight flex-1">
-                                        {project.title || "Sem título"}
-                                    </h3>
-                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button 
-                                            onClick={(e) => handleDeleteProject(e, project.id)}
-                                            className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
+                            <div key={project.id} className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-md transition-all group flex flex-col md:flex-row gap-4 items-center">
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-3">
+                                        <h3 className="font-bold text-slate-800 text-lg leading-tight">
+                                            {project.title || "Sem título"}
+                                        </h3>
+                                        <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap">
+                                            <Calendar className="w-3 h-3" />
+                                            {new Date(project.updatedAt).toLocaleDateString()}
+                                        </span>
                                     </div>
                                 </div>
-                                <p className="text-xs text-slate-500 line-clamp-3 mb-4 flex-1">
-                                    {project.description || "Sem descrição"}
-                                </p>
-                                
-                                <div className="flex flex-wrap gap-1 mb-4 h-6 overflow-hidden">
-                                    {project.tags.slice(0, 3).map(tag => (
-                                        <span key={tag} className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
-                                            {tag}
-                                        </span>
-                                    ))}
-                                    {project.tags.length > 3 && (
-                                        <span className="text-[10px] text-slate-400 pl-1">+{project.tags.length - 3}</span>
-                                    )}
-                                </div>
 
-                                <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-                                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                                        <Calendar className="w-3 h-3" />
-                                        {new Date(project.updatedAt).toLocaleDateString()}
-                                    </span>
+                                <div className="flex items-center gap-2 self-start md:self-center w-full md:w-auto pt-4 md:pt-0 border-t md:border-t-0 border-slate-100">
                                     <button 
                                         onClick={() => handleLoadProject(project)}
-                                        className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                                        className="flex-1 md:flex-none px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2"
                                     >
-                                        <Edit className="w-3 h-3" />
+                                        <Edit className="w-4 h-4" />
                                         Editar
+                                    </button>
+                                    <button 
+                                        onClick={(e) => handleDeleteProject(e, project.id)}
+                                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors border border-transparent hover:border-red-100"
+                                        title="Excluir"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
                                     </button>
                                 </div>
                             </div>
@@ -608,6 +700,22 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
         )}
 
       </div>
+
+      {/* Success Toast */}
+      {successMessage && (
+        <div className="fixed bottom-8 right-8 bg-emerald-600 text-white px-6 py-4 rounded-xl shadow-xl shadow-emerald-200/50 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 z-50">
+            <div className="bg-white/20 p-1.5 rounded-full">
+                <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <p className="font-bold text-sm">{successMessage}</p>
+            <button 
+                onClick={() => setSuccessMessage(null)}
+                className="ml-2 text-emerald-100 hover:text-white transition-colors"
+            >
+                <X className="w-4 h-4" />
+            </button>
+        </div>
+      )}
     </div>
   );
 }
