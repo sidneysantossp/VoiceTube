@@ -81,14 +81,28 @@ export function useTimeline() {
   const moveClip = useCallback((activeId: string, overId: string, overTrackId?: string) => {
     setTimeline((prevTimeline) => {
         const activeIndex = prevTimeline.findIndex((t) => t.instanceId === activeId);
-        const overIndex = prevTimeline.findIndex((t) => t.instanceId === overId);
         
-        // Scenario 1: Reordering within the same track or moving to a specific position in another track (over a clip)
+        // If dropping directly onto a track container (empty space in track)
+        if (overTrackId) {
+             // Only update if the track is actually different to avoid unnecessary renders
+             if (prevTimeline[activeIndex].trackId !== overTrackId) {
+                 const updatedClip = { ...prevTimeline[activeIndex], trackId: overTrackId };
+                 const newTimeline = [...prevTimeline];
+                 newTimeline[activeIndex] = updatedClip;
+                 // Move to the end of the array (rendered last in that track)
+                 return arrayMove(newTimeline, activeIndex, newTimeline.length - 1);
+             }
+             return prevTimeline;
+        }
+
+        // Dropping onto another clip (Reordering or Moving Track via Clip Swap)
+        const overIndex = prevTimeline.findIndex((t) => t.instanceId === overId);
+
         if (activeIndex !== -1 && overIndex !== -1) {
             const activeClip = prevTimeline[activeIndex];
             const overClip = prevTimeline[overIndex];
 
-            // If moving to a different track via sorting
+            // If moving to a different track by hovering over a clip in that track
             if (activeClip.trackId !== overClip.trackId) {
                 const updatedClip = { ...activeClip, trackId: overClip.trackId };
                 const newTimeline = [...prevTimeline];
@@ -96,18 +110,8 @@ export function useTimeline() {
                 return arrayMove(newTimeline, activeIndex, overIndex);
             }
             
-            // Reorder same track
+            // Standard reordering within the same track
             return arrayMove(prevTimeline, activeIndex, overIndex);
-        }
-
-        // Scenario 2: Dropping onto an empty track container (overId is the track ID)
-        if (activeIndex !== -1 && overTrackId) {
-             const updatedClip = { ...prevTimeline[activeIndex], trackId: overTrackId };
-             const newTimeline = [...prevTimeline];
-             newTimeline[activeIndex] = updatedClip;
-             // Move to the end of the timeline array so it renders at the end of the track visually
-             // (assuming tracks render items in array order)
-             return arrayMove(newTimeline, activeIndex, newTimeline.length - 1);
         }
 
         return prevTimeline;

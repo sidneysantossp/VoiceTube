@@ -85,9 +85,11 @@ const TimelineTrack: React.FC<TimelineTrackProps> = ({ trackId, clips, removeCli
         {/* Track Content (Droppable Area for Clips) */}
         <div 
             ref={setDroppableRef}
-            className={`flex-1 min-h-[110px] p-2 flex items-center gap-2 overflow-x-auto custom-scrollbar transition-colors rounded-r-lg ${
-                isOver ? 'bg-indigo-900/10 shadow-[inset_0_0_20px_rgba(79,70,229,0.1)]' : 'bg-slate-900/50'
-            } border border-l-0 border-slate-800 relative`}
+            className={`flex-1 min-h-[110px] p-2 flex items-center gap-2 overflow-x-auto custom-scrollbar transition-all duration-200 rounded-r-lg ${
+                isOver 
+                ? 'bg-indigo-500/10 shadow-[inset_0_0_20px_rgba(99,102,241,0.2)] border-indigo-500' 
+                : 'bg-slate-900/50 border-slate-800'
+            } border border-l-0 relative`}
         >
              {/* --- Visual Time Grid --- */}
              
@@ -129,7 +131,7 @@ const TimelineTrack: React.FC<TimelineTrackProps> = ({ trackId, clips, removeCli
             {clips.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <span className="text-[10px] text-slate-600 uppercase tracking-widest font-semibold opacity-50">
-                        Solte áudio aqui
+                        {isOver ? 'Soltar Aqui' : 'Solte áudio aqui'}
                     </span>
                 </div>
             )}

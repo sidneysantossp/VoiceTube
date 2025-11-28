@@ -149,19 +149,21 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
     const activeClip = timeline.find(c => c.instanceId === activeId);
     if (!activeClip) return;
 
-    const overClip = timeline.find(c => c.instanceId === overId);
+    // Check if we are hovering over a Track Container (Empty Space)
     const isOverTrack = tracks.includes(overId as string);
 
-    // Case 1: Dragging over another CLIP (Sorting/Reordering)
-    if (overClip) {
-        // We call moveClip for both same-track and cross-track sorting
-        moveClip(activeId as string, overId as string);
-    } 
-    // Case 2: Dragging over an EMPTY TRACK AREA (Moving to Track)
-    else if (isOverTrack) {
+    // Case 1: Dragging over an EMPTY TRACK AREA (Moving to Track)
+    if (isOverTrack) {
         // Only trigger update if we are actually moving to a NEW track
         if (activeClip.trackId !== overId) {
              moveClip(activeId as string, overId as string, overId as string);
+        }
+    }
+    // Case 2: Dragging over another CLIP (Sorting/Reordering/Moving Track via Clip)
+    else {
+        const overClip = timeline.find(c => c.instanceId === overId);
+        if (overClip) {
+             moveClip(activeId as string, overId as string);
         }
     }
   };
@@ -181,7 +183,6 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
         return;
     }
 
-    const activeId = active.id;
     const overId = over.id;
 
     // 1. Dropping from Sidebar to a Track
@@ -205,19 +206,6 @@ export default function AudioEditor({ sourceClips, mergedHistory, onSaveMerged, 
             addClip(clipToAdd, targetTrack);
         }
     } 
-    // 2. TimelineClip moves are mostly handled by DragOver (sorting), 
-    // but we add a safety check here to ensure final placement logic is sound
-    else if (active.data.current?.type === 'TimelineClip') {
-        const isTrackDrop = tracks.includes(overId as string);
-        
-        if (isTrackDrop) {
-             const activeClip = timeline.find(c => c.instanceId === activeId);
-             // Ensure it ends up in the track if dragged over background and wasn't caught by dragOver
-             if (activeClip && activeClip.trackId !== overId) {
-                 moveClip(activeId as string, overId as string, overId as string);
-             }
-        } 
-    }
   };
   
   const handleToggleTimelinePreview = async () => {

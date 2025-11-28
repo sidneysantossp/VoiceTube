@@ -52,18 +52,21 @@ const TimelineClipItem: React.FC<TimelineClipItemProps> = ({ clip, onRemove, onU
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
     // Add visual margin for the offset/gap
     marginLeft: `${offsetWidth}px`,
-    width: `${clipWidth}px`
+    width: `${clipWidth}px`,
+    // Ghost Element Style: Lower opacity when dragging the original item
+    opacity: isDragging ? 0.3 : 1,
   };
 
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`group relative flex-shrink-0 flex items-center gap-2 p-2 rounded-lg border border-slate-700/50 hover:border-indigo-500/50 transition-all select-none ${
-          isDragging ? 'bg-slate-700 shadow-2xl z-50 ring-2 ring-indigo-500' : 'bg-slate-800'
+      className={`group relative flex-shrink-0 flex items-center gap-2 p-2 rounded-lg border transition-all select-none ${
+          isDragging 
+          ? 'border-indigo-500/50 border-dashed bg-slate-800/50' // Ghost style
+          : 'border-slate-700/50 bg-slate-800 hover:border-indigo-500/50'
       }`}
     >
       {/* Visual Offset Indicator (Dashed Line) */}
@@ -103,21 +106,23 @@ const TimelineClipItem: React.FC<TimelineClipItemProps> = ({ clip, onRemove, onU
       </div>
 
       {/* Actions (Hover) */}
-      <div className="absolute -top-3 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all scale-0 group-hover:scale-100 z-20">
-        <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="p-1 bg-slate-700 text-slate-400 hover:bg-indigo-600 hover:text-white rounded-full shadow-sm"
-            title="Ajustar posição"
-        >
-            <Settings className="w-3 h-3" />
-        </button>
-        <button 
-            onClick={() => onRemove(clip.instanceId)}
-            className="p-1 bg-slate-700 text-slate-400 hover:bg-red-500 hover:text-white rounded-full shadow-sm"
-        >
-            <Trash2 className="w-3 h-3" />
-        </button>
-      </div>
+      {!isDragging && (
+        <div className="absolute -top-3 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all scale-0 group-hover:scale-100 z-20">
+            <button 
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-1 bg-slate-700 text-slate-400 hover:bg-indigo-600 hover:text-white rounded-full shadow-sm"
+                title="Ajustar posição"
+            >
+                <Settings className="w-3 h-3" />
+            </button>
+            <button 
+                onClick={() => onRemove(clip.instanceId)}
+                className="p-1 bg-slate-700 text-slate-400 hover:bg-red-500 hover:text-white rounded-full shadow-sm"
+            >
+                <Trash2 className="w-3 h-3" />
+            </button>
+        </div>
+      )}
 
       {/* Settings Popover */}
       {isSettingsOpen && (

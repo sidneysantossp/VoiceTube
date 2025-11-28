@@ -17,11 +17,7 @@ import {
   Check
 } from 'lucide-react';
 
-interface AdminDashboardProps {
-  isDemo?: boolean;
-}
-
-export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) {
+export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<'users' | 'settings'>('users');
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [settings, setSettings] = useState<SystemSetting[]>([]);
@@ -34,60 +30,8 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
   const [keyTestStatus, setKeyTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   useEffect(() => {
-    if (isDemo) {
-      loadMockData();
-    } else {
-      fetchData();
-    }
-  }, [activeTab, isDemo]);
-
-  const loadMockData = () => {
-    setLoading(true);
-    setTimeout(() => {
-      if (activeTab === 'users') {
-        setUsers([
-          {
-            id: 'demo-user-123',
-            email: 'demo@voicetube.com',
-            full_name: 'Admin Demo',
-            role: 'admin',
-            is_banned: false,
-            created_at: new Date().toISOString()
-          },
-          {
-            id: 'user-456',
-            email: 'user@example.com',
-            full_name: 'John Doe',
-            role: 'user',
-            is_banned: false,
-            created_at: new Date(Date.now() - 86400000).toISOString()
-          },
-          {
-            id: 'user-789',
-            email: 'spammer@fake.com',
-            full_name: 'Spam Bot',
-            role: 'user',
-            is_banned: true,
-            created_at: new Date(Date.now() - 172800000).toISOString()
-          }
-        ]);
-      } else {
-        setSettings([
-          {
-            key: 'gemini_api_key',
-            value: 'AIzaSy... (Mock Key)',
-            description: 'Chave Global do Google Gemini (Sobrescreve .env)'
-          },
-          {
-            key: 'maintenance_mode',
-            value: 'false',
-            description: 'Modo de Manutenção'
-          }
-        ]);
-      }
-      setLoading(false);
-    }, 500);
-  };
+    fetchData();
+  }, [activeTab]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -118,11 +62,6 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
   };
 
   const toggleUserBan = async (userId: string, currentStatus: boolean) => {
-    if (isDemo) {
-        setUsers(prev => prev.map(u => u.id === userId ? { ...u, is_banned: !currentStatus } : u));
-        return;
-    }
-
     try {
       const { error } = await supabase
         .from('profiles')
@@ -186,8 +125,6 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
         alert("A Chave API do Gemini não pode ficar vazia.");
         return;
       }
-      // Basic format check: Google keys usually start with AIza and are long
-      // Or at least enforce a minimum length to prevent '123'
       if (key.length < 20) {
         alert("A Chave API parece inválida (muito curta).");
         return;
@@ -195,14 +132,6 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
     }
 
     setSaving(true);
-    if (isDemo) {
-        setTimeout(() => {
-            setSaving(false);
-            alert("Configurações salvas (Modo Demo)!");
-        }, 800);
-        return;
-    }
-
     try {
       for (const setting of settings) {
         const { error } = await supabase
@@ -234,10 +163,16 @@ export default function AdminDashboard({ isDemo = false }: AdminDashboardProps) 
             <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
               <Shield className="w-8 h-8 text-indigo-600" />
               Painel Administrativo
-              {isDemo && <span className="text-sm bg-amber-100 text-amber-700 px-2 py-1 rounded-full border border-amber-200">Modo Demo</span>}
             </h1>
             <p className="text-slate-500 mt-1">Gerenciamento global da plataforma Voice Tube</p>
           </div>
+          
+          <button 
+             onClick={fetchData} 
+             className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-600 hover:text-indigo-600 hover:border-indigo-200 transition-colors"
+          >
+             Atualizar Dados
+          </button>
         </div>
 
         {/* Tabs */}

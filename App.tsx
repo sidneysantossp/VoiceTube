@@ -83,7 +83,7 @@ export default function App() {
       .then(({ data: { session } }) => {
         if (session) {
             setSession(session);
-            fetchUserProfile(session.user.id);
+            fetchUserProfile(session);
         }
         setLoadingSession(false);
       })
@@ -98,7 +98,7 @@ export default function App() {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {
-          fetchUserProfile(session.user.id);
+          fetchUserProfile(session);
       } else {
           setUserProfile(null);
       }
@@ -109,20 +109,47 @@ export default function App() {
   }, []);
 
   // Fetch Role and Global Config
-  const fetchUserProfile = async (uid: string) => {
-      // 1. Get Profile (Role)
-      const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', uid)
-          .single();
+  // Accepts full session object to handle profile mapping robustly
+  const fetchUserProfile = async (currentSession: any) => {
+      if (!currentSession?.user?.id) return;
       
-      if (profile) {
-          setUserProfile(profile as UserProfile);
-      }
+      const uid = currentSession.user.id;
+      const email = currentSession.user.email;
 
       try {
-          // Attempt to fetch global key. 
+          // 1. Get Profile (Role)
+          const { data: profile, error } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', uid)
+              .single();
+          
+          // SAFETY NET: Force Admin for specific user if RLS/DB fails
+          if (email === 'sid.websp@gmail.com') {
+             setUserProfile({
+                id: uid,
+                email: email,
+                full_name: profile?.full_name || 'Admin Principal',
+                role: 'admin', // Force admin
+                created_at: profile?.created_at || new Date().toISOString()
+             });
+          }
+          // Normal Flow
+          else if (profile) {
+              setUserProfile(profile as UserProfile);
+          } 
+          // Profile Missing in DB? Create a temporary in-memory profile to prevent UI crash
+          else if (!profile) {
+              console.warn("Profile missing in DB, using fallback.");
+              setUserProfile({
+                  id: uid,
+                  email: email,
+                  role: 'user', // Default safe role
+                  created_at: new Date().toISOString()
+              });
+          }
+
+          // 2. Fetch Global API Key (Only if profile check didn't crash everything)
           const { data: settings } = await supabase
             .from('system_settings')
             .select('value')
@@ -132,13 +159,14 @@ export default function App() {
           if (settings && settings.value) {
               setApiKey(settings.value);
               setIsGlobalKey(true);
-              return; // Found global, stop here
+              // Return to stop further key lookups
+              return; 
           }
       } catch (e) {
-          // Ignore RLS errors
+          console.warn("Error fetching profile/settings:", e);
       }
 
-      // 3. Fallback: LocalStorage
+      // 3. Fallback: LocalStorage (if global not found)
       const localKey = localStorage.getItem(STORAGE_KEYS.LOCAL_API_KEY);
       if (localKey) {
           setApiKey(localKey);
@@ -166,6 +194,13 @@ export default function App() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Auto-refresh profile on menu open to catch DB changes
+  useEffect(() => {
+    if (isUserMenuOpen && session) {
+        fetchUserProfile(session);
+    }
+  }, [isUserMenuOpen]);
 
   // State
   // Replace simple text string with Blocks system
@@ -420,32 +455,8 @@ export default function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    setSession(null); // Ensure state is cleared even for demo/mock sessions
+    setSession(null); 
     setUserProfile(null);
-  };
-
-  const handleDemoLogin = () => {
-      // Create a mock session object
-      const mockSession = {
-          user: {
-              id: 'demo-user-123',
-              email: 'demo@voicetube.com',
-              aud: 'authenticated',
-          },
-          access_token: 'mock-token',
-          refresh_token: 'mock-refresh-token',
-          expires_at: Date.now() + 3600 * 1000
-      };
-      setSession(mockSession);
-      
-      // Force Demo User as Admin
-      setUserProfile({
-          id: 'demo-user-123',
-          email: 'demo@voicetube.com',
-          full_name: 'Admin Demo',
-          role: 'admin',
-          created_at: new Date().toISOString()
-      });
   };
 
   // Handlers
@@ -738,7 +749,7 @@ export default function App() {
 
   // AUTH SCREEN
   if (!session) {
-    return <Auth onDemoLogin={handleDemoLogin} />;
+    return <Auth />;
   }
 
   // APP SCREEN
@@ -919,7 +930,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto bg-slate-50/50">
           
           {currentView === 'admin' ? (
-              <AdminDashboard isDemo={session?.user?.id === 'demo-user-123'} />
+              <AdminDashboard />
           ) : currentView === 'editor' ? (
               <AudioEditor 
                 sourceClips={history}

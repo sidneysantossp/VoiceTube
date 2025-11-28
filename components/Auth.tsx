@@ -8,16 +8,11 @@ import {
   ArrowRight,
   Sparkles,
   AlertCircle,
-  UserCheck,
   Eye,
   EyeOff
 } from 'lucide-react';
 
-interface AuthProps {
-  onDemoLogin?: () => void;
-}
-
-export default function Auth({ onDemoLogin }: AuthProps) {
+export default function Auth() {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -142,20 +137,6 @@ export default function Auth({ onDemoLogin }: AuthProps) {
             )}
           </button>
         </form>
-
-        {/* Demo Login Button */}
-        {onDemoLogin && (
-          <div className="mt-4">
-            <button
-              onClick={onDemoLogin}
-              type="button"
-              className="w-full bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
-            >
-              <UserCheck className="w-4 h-4" />
-              Entrar Modo Demo
-            </button>
-          </div>
-        )}
 
         {/* Footer / Toggle */}
         <div className="mt-6 pt-6 border-t border-white/5 text-center">
