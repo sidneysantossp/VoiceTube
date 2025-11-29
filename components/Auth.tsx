@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { 
@@ -41,7 +42,18 @@ export default function Auth() {
         if (error) throw error;
       }
     } catch (error: any) {
-      setError(error.message || 'Ocorreu um erro de autenticação.');
+      let errorMessage = error.message || 'Ocorreu um erro de autenticação.';
+      
+      // Tradução de erros comuns do Supabase
+      if (errorMessage.includes('Invalid login credentials')) {
+        errorMessage = 'Credenciais de login inválidas. Verifique seu email e senha.';
+      } else if (errorMessage.includes('User already registered')) {
+        errorMessage = 'Este usuário já está cadastrado.';
+      } else if (errorMessage.includes('Password should be at least')) {
+        errorMessage = 'A senha deve ter pelo menos 6 caracteres.';
+      }
+
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -72,7 +84,7 @@ export default function Auth() {
 
         {/* Error Message */}
         {error && (
-          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3 text-red-400 text-sm">
+          <div className="mb-6 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3 text-red-400 text-sm animate-in fade-in slide-in-from-top-2">
             <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>

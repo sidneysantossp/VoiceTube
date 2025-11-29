@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { UserIntegrations } from '../types';
 import { GoogleGenAI } from '@google/genai';
@@ -20,12 +21,14 @@ import {
   FolderOpen,
   Calendar,
   Search,
-  CheckCircle2
+  CheckCircle2,
+  FileText
 } from 'lucide-react';
 
 interface TitleCreatorProps {
   apiKey: string;
   integrations?: UserIntegrations;
+  onCreateScript?: (data: { title: string; description: string; tags: string[] }) => void;
 }
 
 interface Suggestion {
@@ -41,7 +44,7 @@ interface SEOProject {
   updatedAt: string;
 }
 
-export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps) {
+export default function TitleCreator({ apiKey, integrations, onCreateScript }: TitleCreatorProps) {
   // Navigation State
   const [activeTab, setActiveTab] = useState<'editor' | 'library'>('editor');
 
@@ -678,8 +681,16 @@ export default function TitleCreator({ apiKey, integrations }: TitleCreatorProps
 
                                 <div className="flex items-center gap-2 self-start md:self-center w-full md:w-auto pt-4 md:pt-0 border-t md:border-t-0 border-slate-100">
                                     <button 
+                                        onClick={() => onCreateScript?.({ title: project.title, description: project.description, tags: project.tags })}
+                                        className="flex-1 md:flex-none px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-emerald-100"
+                                        title="Enviar para Criador de Roteiro"
+                                    >
+                                        <FileText className="w-4 h-4" />
+                                        Criar Roteiro
+                                    </button>
+                                    <button 
                                         onClick={() => handleLoadProject(project)}
-                                        className="flex-1 md:flex-none px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                                        className="flex-1 md:flex-none px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 border border-indigo-100"
                                     >
                                         <Edit className="w-4 h-4" />
                                         Editar

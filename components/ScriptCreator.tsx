@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { UserIntegrations } from '../types';
@@ -26,11 +27,13 @@ import {
   Maximize2
 } from 'lucide-react';
 import { ScriptBlock } from '../types';
+import { generateContentWithRetry } from '../utils/aiService';
 
 interface ScriptCreatorProps {
   onExportScript: (blocks: ScriptBlock[]) => void;
   apiKey: string;
   integrations?: UserIntegrations; // Added support for user settings
+  initialData?: { premise: string } | null; // NEW: Accept initial data
 }
 
 // Data Structures for the "Architect" Phase
@@ -80,10 +83,11 @@ const AUDIENCE_SUGGESTIONS = [
   "Entusiastas de Fitness"
 ];
 
-export default function ScriptCreator({ onExportScript, apiKey, integrations }: ScriptCreatorProps) {
+export default function ScriptCreator({ onExportScript, apiKey, integrations, initialData }: ScriptCreatorProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
+  const [isRefiningPremise, setIsRefiningPremise] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Step 1: Inputs
@@ -106,6 +110,15 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations }: 
 
   // Step 3: Final Script
   const [generatedBlocks, setGeneratedBlocks] = useState<ScriptBlock[]>([]);
+
+  // PRE-FILL DATA EFFECT
+  useEffect(() => {
+    if (initialData?.premise) {
+        setPremise(initialData.premise);
+        setStep(1); // Reset to input phase
+        // Optionally try to auto-detect things if we wanted, but for now just fill premise
+    }
+  }, [initialData]);
 
   // Determine active provider based on settings
   const getActiveProvider = () => {
@@ -217,8 +230,13 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations }: 
 
       } else {
           // GEMINI SDK CALL (Default)
-          const ai = new GoogleGenAI({ apiKey: apiKey });
-          const response = await ai.models.generateContent({
+          // Prioritize integration key, fallback to prop key (from global settings)
+          const keyToUse = integrations?.gemini_key || apiKey;
+
+          if (!keyToUse) throw new Error("API Key do Gemini não encontrada.");
+
+          const response = await generateContentWithRetry({
+            apiKey: keyToUse,
             model: "gemini-2.5-flash",
             contents: [{ parts: [{ text: userPrompt }] }],
             config: {
@@ -233,6 +251,54 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations }: 
       }
   };
 
+  // --- PREMISE REFINER ---
+  const handleRefinePremise = async () => {
+    if (!premise.trim()) {
+        setError("Digite um rascunho da ideia para a IA melhorar.");
+        return;
+    }
+    
+    // Validation based on provider
+    if (activeProvider === 'gemini' && !apiKey && !integrations?.gemini_key) {
+        setError("API Key do Gemini não configurada.");
+        return;
+    }
+    if (activeProvider === 'openai' && !integrations?.openai_key) {
+        setError("API Key da OpenAI não configurada.");
+        return;
+    }
+
+    setIsRefiningPremise(true);
+    setError(null);
+    try {
+        const systemInstruction = "Você é um consultor de roteiros especialista em Loglines. Responda APENAS com um objeto JSON contendo a premissa refinada.";
+        const prompt = `Analise a seguinte ideia bruta e reescreva-a como uma Premissa/Logline profissional, clara e instigante. Mantenha o mesmo sentido original, mas melhore a escrita.
+        
+        Ideia Original: "${premise}"
+        
+        Saída JSON Esperada:
+        { "refined": "Texto da premissa refinada aqui" }`;
+
+        const jsonText = await callAI(systemInstruction, prompt, 500, 0.7);
+        if (jsonText) {
+            const parsed = cleanAndParseJSON(jsonText);
+            // Flexible parsing: check multiple potential keys or raw string
+            const refinedContent = parsed.refined || parsed.premise || parsed.logline || parsed.text;
+            
+            if (refinedContent && typeof refinedContent === 'string') {
+                setPremise(refinedContent);
+            } else if (typeof parsed === 'string') {
+                setPremise(parsed); // Fallback if model returned plain string despite instruction
+            }
+        }
+    } catch (error) {
+        console.error("Refine Premise Error:", error);
+        setError("Não foi possível refinar a premissa. Tente novamente.");
+    } finally {
+        setIsRefiningPremise(false);
+    }
+  };
+
   // --- AGENT 1: THE ARCHITECT ---
   const handleGenerateStructure = async () => {
     if (!premise.trim()) {
@@ -240,7 +306,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations }: 
         return;
     }
     // Validation based on provider
-    if (activeProvider === 'gemini' && !apiKey) {
+    if (activeProvider === 'gemini' && !apiKey && !integrations?.gemini_key) {
         setError("API Key do Gemini não configurada.");
         return;
     }
@@ -560,12 +626,22 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations }: 
                     <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 space-y-6">
                         <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">Premissa / Ideia Central</label>
-                            <textarea
-                                value={premise}
-                                onChange={(e) => setPremise(e.target.value)}
-                                placeholder="Ex: Um documentário curto sobre a história do café, começando na Etiópia e terminando na Starbucks moderna..."
-                                className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none text-slate-700 transition-all"
-                            />
+                            <div className="relative">
+                                <textarea
+                                    value={premise}
+                                    onChange={(e) => setPremise(e.target.value)}
+                                    placeholder="Ex: Um documentário curto sobre a história do café, começando na Etiópia e terminando na Starbucks moderna..."
+                                    className="w-full h-32 p-4 pr-12 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none resize-none text-slate-700 transition-all"
+                                />
+                                <button
+                                    onClick={handleRefinePremise}
+                                    disabled={isRefiningPremise || !premise.trim()}
+                                    className="absolute right-3 top-3 p-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300 hover:text-indigo-600 transition-colors shadow-sm disabled:opacity-50"
+                                    title="Melhorar com IA"
+                                >
+                                    {isRefiningPremise ? <Loader2 className="w-4 h-4 animate-spin text-indigo-500" /> : <Sparkles className="w-4 h-4" />}
+                                </button>
+                            </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

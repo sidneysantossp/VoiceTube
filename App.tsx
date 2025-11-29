@@ -1,4 +1,5 @@
 
+
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { supabase } from './lib/supabase';
@@ -224,6 +225,9 @@ export default function App() {
 
   // Navigation State
   const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'title-creator' | 'admin' | 'profile' | 'settings'>('tts');
+
+  // Script Creator Initial Data State
+  const [scriptInitialData, setScriptInitialData] = useState<{ premise: string } | null>(null);
 
   // User Menu State
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -521,6 +525,13 @@ export default function App() {
   const handleImportScript = (newBlocks: ScriptBlock[]) => {
       setBlocks(newBlocks);
       setCurrentView('tts');
+  };
+
+  // NEW: Handler to bridge TitleCreator to ScriptCreator
+  const handleCreateScriptFromTitle = (data: { title: string; description: string; tags: string[] }) => {
+      const formattedPremise = `TÍTULO DO VÍDEO: ${data.title}\n\nCONTEXTO/DESCRIÇÃO DO CONTEÚDO: ${data.description}\n\nPALAVRAS-CHAVE/TAGS: ${data.tags.join(', ')}`;
+      setScriptInitialData({ premise: formattedPremise });
+      setCurrentView('script-creator');
   };
 
   const handleSaveVoice = (newVoice: VoiceOption) => {
@@ -901,80 +912,84 @@ export default function App() {
           <span className="font-bold text-xl tracking-tight">Voice Tube</span>
         </div>
         
-        <div className="px-4 py-2 flex-1">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Menu Principal</p>
-          <nav className="space-y-1">
-            <button 
-              onClick={() => setCurrentView('tts')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                currentView === 'tts' 
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              <FileAudio className="w-5 h-5" />
-              Texto para Voz
-            </button>
-            <button 
-              onClick={() => setCurrentView('script-creator')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                currentView === 'script-creator' 
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              <BookOpen className="w-5 h-5" />
-              Criador de Roteiro
-            </button>
-            <button 
-              onClick={() => setCurrentView('title-creator')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                currentView === 'title-creator' 
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              <LayoutTemplate className="w-5 h-5" />
-              Criador de Títulos
-            </button>
-            <button 
-              onClick={() => setCurrentView('cloning')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                currentView === 'cloning' 
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              <Mic className="w-5 h-5" />
-              Clonagem de Voz
-            </button>
-            <button 
-              onClick={() => setCurrentView('editor')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                currentView === 'editor' 
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                  : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              <Scissors className="w-5 h-5" />
-              Edição de Áudio
-            </button>
-          </nav>
-
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2 mt-6">Sistema</p>
-          <nav className="space-y-1">
-             <button 
-                onClick={() => setCurrentView('settings')}
+        <div className="px-4 py-2 flex-1 flex flex-col">
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Menu Principal</p>
+            <nav className="space-y-1">
+              <button 
+                onClick={() => setCurrentView('title-creator')}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'settings' 
+                  currentView === 'title-creator' 
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
                     : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
                 }`}
               >
-                <Cpu className="w-5 h-5" />
-                Configurações
+                <LayoutTemplate className="w-5 h-5" />
+                Criador de Títulos
               </button>
-          </nav>
+              <button 
+                onClick={() => setCurrentView('script-creator')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                  currentView === 'script-creator' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <BookOpen className="w-5 h-5" />
+                Criador de Roteiro
+              </button>
+              <button 
+                onClick={() => setCurrentView('tts')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                  currentView === 'tts' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <FileAudio className="w-5 h-5" />
+                Texto para Voz
+              </button>
+              <button 
+                onClick={() => setCurrentView('editor')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                  currentView === 'editor' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <Scissors className="w-5 h-5" />
+                Edição de Áudio
+              </button>
+              <button 
+                onClick={() => setCurrentView('cloning')}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                  currentView === 'cloning' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                }`}
+              >
+                <Mic className="w-5 h-5" />
+                Clonagem de Voz
+              </button>
+            </nav>
+          </div>
+
+          <div className="mt-auto">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Sistema</p>
+            <nav className="space-y-1">
+               <button 
+                  onClick={() => setCurrentView('settings')}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
+                    currentView === 'settings' 
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
+                      : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
+                  }`}
+                >
+                  <Cpu className="w-5 h-5" />
+                  Configurações
+                </button>
+            </nav>
+          </div>
         </div>
         
         {/* FREE BETA BANNER IN SIDEBAR */}
@@ -1133,7 +1148,7 @@ export default function App() {
                 onUpdateIntegrations={updateIntegrations}
               />
           ) : currentView === 'title-creator' ? (
-              <TitleCreator apiKey={apiKey} integrations={integrations} />
+              <TitleCreator apiKey={apiKey} integrations={integrations} onCreateScript={handleCreateScriptFromTitle} />
           ) : currentView === 'editor' ? (
               <AudioEditor 
                 sourceClips={history}
@@ -1150,6 +1165,7 @@ export default function App() {
                 onExportScript={handleImportScript} 
                 apiKey={apiKey} 
                 integrations={integrations}
+                initialData={scriptInitialData}
              />
           ) : currentView === 'profile' ? (
              <UserProfilePage 
