@@ -1,6 +1,6 @@
+
 import { useState, useEffect, useCallback } from 'react';
 import { GeneratedClip, TimelineClip } from '../types';
-import { arrayMove } from '@dnd-kit/sortable';
 import { mixAudioTracks } from '../utils/audioUtils';
 
 const COLORS = [
@@ -13,7 +13,7 @@ export function useTimeline() {
   
   const [timeline, setTimeline] = useState<TimelineClip[]>(() => {
     try {
-      const saved = localStorage.getItem('gemini_voice_timeline_v3');
+      const saved = localStorage.getItem('gemini_voice_timeline_v5');
       if (saved) {
         return JSON.parse(saved, (key, value) => {
           if (key === 'createdAt') return new Date(value);
@@ -22,46 +22,34 @@ export function useTimeline() {
       }
     } catch (e) {
       console.error("Failed to load timeline from storage. Resetting.", e);
-      localStorage.removeItem('gemini_voice_timeline_v3');
+      localStorage.removeItem('gemini_voice_timeline_v5');
     }
     return [];
   });
 
   // Persist to LocalStorage
   useEffect(() => {
-    localStorage.setItem('gemini_voice_timeline_v3', JSON.stringify(timeline));
+    localStorage.setItem('gemini_voice_timeline_v5', JSON.stringify(timeline));
   }, [timeline]);
 
-  // Add a new track
   const addTrack = useCallback(() => {
       setTracks(prev => [...prev, `track-${Date.now()}`]);
   }, []);
 
-  // Remove a track
   const removeTrack = useCallback((trackId: string) => {
-      if (tracks.length <= 1) return; // Keep at least one track
+      if (tracks.length <= 1) return;
       setTracks(prev => prev.filter(t => t !== trackId));
-      // Remove clips in that track
       setTimeline(prev => prev.filter(clip => clip.trackId !== trackId));
   }, [tracks.length]);
-
-  // Reorder tracks
-  const moveTrack = useCallback((activeId: string, overId: string) => {
-      setTracks((items) => {
-          const oldIndex = items.indexOf(activeId);
-          const newIndex = items.indexOf(overId);
-          return arrayMove(items, oldIndex, newIndex);
-      });
-  }, []);
 
   const addClip = useCallback((clip: GeneratedClip, targetTrackId: string = 'track-1') => {
     const randomColor = COLORS[Math.floor(Math.random() * COLORS.length)];
     const newClip: TimelineClip = {
       ...clip,
       instanceId: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      startTime: 0, // Calculated dynamically during mixing/render
+      startTime: 0,
       color: randomColor,
-      duration: clip.duration || 5, // Default to 5s if duration unknown
+      duration: clip.duration || 5,
       trackId: targetTrackId,
       startOffset: 0
     };
@@ -79,51 +67,46 @@ export function useTimeline() {
     ));
   }, []);
 
-  const moveClip = useCallback((activeId: string, overId: string, overTrackId?: string) => {
-    setTimeline((prevTimeline) => {
-        const activeIndex = prevTimeline.findIndex((t) => t.instanceId === activeId);
-        
-        // If dropping directly onto a track container (empty space in track)
-        if (overTrackId) {
-             // Only update if the track is actually different to avoid unnecessary renders
-             if (prevTimeline[activeIndex].trackId !== overTrackId) {
-                 const updatedClip = { ...prevTimeline[activeIndex], trackId: overTrackId };
-                 const newTimeline = [...prevTimeline];
-                 newTimeline[activeIndex] = updatedClip;
-                 // Move to the end of the array (rendered last in that track)
-                 return arrayMove(newTimeline, activeIndex, newTimeline.length - 1);
-             }
-             return prevTimeline;
-        }
+  // Native Move Logic: Move clip to a specific track (append to end)
+  const moveClipToTrack = useCallback((instanceId: string, targetTrackId: string) => {
+      setTimeline(prev => prev.map(c => 
+          c.instanceId === instanceId ? { ...c, trackId: targetTrackId } : c
+      ));
+  }, []);
 
-        // Dropping onto another clip (Reordering or Moving Track via Clip Swap)
-        const overIndex = prevTimeline.findIndex((t) => t.instanceId === overId);
+  // Native Swap Logic: Swap two clips (reordering)
+  const swapClips = useCallback((sourceId: string, targetId: string) => {
+      setTimeline(prev => {
+          const sourceIndex = prev.findIndex(c => c.instanceId === sourceId);
+          const targetIndex = prev.findIndex(c => c.instanceId === targetId);
+          
+          if (sourceIndex === -1 || targetIndex === -1) return prev;
+          if (sourceIndex === targetIndex) return prev;
 
-        if (activeIndex !== -1 && overIndex !== -1) {
-            const activeClip = prevTimeline[activeIndex];
-            const overClip = prevTimeline[overIndex];
+          const newTimeline = [...prev];
+          
+          // Swap the objects in the array
+          const temp = newTimeline[sourceIndex];
+          newTimeline[sourceIndex] = newTimeline[targetIndex];
+          newTimeline[targetIndex] = temp;
 
-            // If moving to a different track by hovering over a clip in that track
-            if (activeClip.trackId !== overClip.trackId) {
-                const updatedClip = { ...activeClip, trackId: overClip.trackId };
-                const newTimeline = [...prevTimeline];
-                newTimeline[activeIndex] = updatedClip;
-                return arrayMove(newTimeline, activeIndex, overIndex);
-            }
-            
-            // Standard reordering within the same track
-            return arrayMove(prevTimeline, activeIndex, overIndex);
-        }
+          // IMPORTANT: Swap their Track IDs to maintain visual consistency if tracks differ
+          const sourceTrack = temp.trackId;
+          const targetTrack = newTimeline[sourceIndex].trackId; // The one we swapped with
 
-        return prevTimeline;
-    });
+          // We want the source clip (now at targetIndex) to adopt the target's track
+          newTimeline[targetIndex] = { ...newTimeline[targetIndex], trackId: targetTrack };
+          // We want the target clip (now at sourceIndex) to adopt the source's track
+          newTimeline[sourceIndex] = { ...newTimeline[sourceIndex], trackId: sourceTrack };
+
+          return newTimeline;
+      });
   }, []);
 
   const clearTimeline = useCallback(() => {
     setTimeline([]);
   }, []);
 
-  // Helper to get duration of a specific track
   const getTrackDuration = (trackId: string) => {
       const trackClips = timeline.filter(c => c.trackId === trackId);
       return trackClips.reduce((acc, clip) => acc + (clip.duration || 0) + (clip.startOffset || 0), 0);
@@ -138,7 +121,6 @@ export function useTimeline() {
       return max;
   };
 
-  // Expose mixing capability directly from hook state
   const previewMix = useCallback(async () => {
       if (timeline.length === 0) return null;
       return await mixAudioTracks(timeline);
@@ -150,8 +132,9 @@ export function useTimeline() {
     addClip,
     removeClip,
     updateClip,
-    moveClip,
-    moveTrack,
+    moveClipToTrack,
+    swapClips,
+    moveTrack: () => {}, // Deprecated for simplicity in native mode
     clearTimeline,
     addTrack,
     removeTrack,

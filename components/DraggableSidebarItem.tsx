@@ -1,5 +1,5 @@
+
 import React from 'react';
-import { useDraggable } from '@dnd-kit/core';
 import { GeneratedClip } from '../types';
 import { Play, Pause, Plus, GripVertical } from 'lucide-react';
 
@@ -8,31 +8,30 @@ interface DraggableSidebarItemProps {
   isPlaying: boolean;
   onPlay: () => void;
   onAdd: () => void;
+  onDragStart: (e: React.DragEvent, clip: GeneratedClip) => void;
 }
 
-const DraggableSidebarItem: React.FC<DraggableSidebarItemProps> = ({ clip, isPlaying, onPlay, onAdd }) => {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `source-${clip.id}`,
-    data: {
-      type: 'SourceClip',
-      clip: clip
-    }
-  });
+const DraggableSidebarItem: React.FC<DraggableSidebarItemProps> = ({ clip, isPlaying, onPlay, onAdd, onDragStart }) => {
+  
+  const handleDragStart = (e: React.DragEvent) => {
+      // Set drag data
+      e.dataTransfer.effectAllowed = 'copy';
+      // Pass data to parent logic via JSON or just rely on state in AudioEditor
+      e.dataTransfer.setData('application/json', JSON.stringify({ type: 'sidebar', clip }));
+      onDragStart(e, clip);
+  };
 
   return (
     <div 
-        ref={setNodeRef}
-        {...listeners}
-        {...attributes}
-        className={`p-3 rounded-xl border border-slate-100 bg-white transition-all group touch-none ${
-            isDragging ? 'opacity-50 ring-2 ring-indigo-500 rotate-2' : 'hover:border-indigo-200 hover:shadow-sm'
-        }`}
+        draggable
+        onDragStart={handleDragStart}
+        className="p-3 rounded-xl border border-slate-100 bg-white transition-all group hover:border-indigo-200 hover:shadow-sm cursor-grab active:cursor-grabbing"
     >
         <div className="flex justify-between gap-2 mb-2">
             <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full uppercase">
                 {clip.voiceName}
             </span>
-             <div className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-indigo-400">
+             <div className="text-slate-300 hover:text-indigo-400">
                 <GripVertical className="w-4 h-4" />
              </div>
         </div>

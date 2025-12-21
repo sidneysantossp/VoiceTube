@@ -1,5 +1,4 @@
 
-
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { UserIntegrations } from '../types';
@@ -24,7 +23,8 @@ import {
   HelpCircle,
   ChevronDown,
   Pencil,
-  Maximize2
+  Maximize2,
+  Film
 } from 'lucide-react';
 import { ScriptBlock } from '../types';
 import { generateContentWithRetry } from '../utils/aiService';
@@ -56,11 +56,63 @@ interface StoryStructure {
   outline: StoryBeat[];
 }
 
-const GENRE_SUGGESTIONS = [
-  "Vídeo para YouTube", "Curta Metragem", "Podcast", "Comercial / Anúncio",
-  "Tutorial Educativo", "Storytelling Narrativo", "Documentário", "Reels / TikTok (Viral)",
-  "Meditação Guiada", "Audiolivro"
-];
+// --- NEW CONFIGURATION CONSTANTS ---
+const FORMAT_DEFINITIONS: Record<string, { label: string, durations: string[] }> = {
+  "Vídeo para YouTube": {
+    label: "Vídeo Longo (YouTube / Vimeo)",
+    durations: [
+      "~2 Minutos (Curto)",
+      "~5 Minutos (Padrão)",
+      "~8 Minutos (Ideal para Ads)",
+      "~10 Minutos (Detalhado)",
+      "~15 Minutos (Aprofundado)",
+      "~20+ Minutos (Documentário)"
+    ]
+  },
+  "Shorts / Reels / TikTok": {
+    label: "Vídeo Vertical (Shorts / Reels / TikTok)",
+    durations: [
+      "15 Segundos (Viral Rápido)",
+      "30 Segundos (Padrão)",
+      "60 Segundos (Storytelling)",
+      "90 Segundos (Max Reels/TikTok)"
+    ]
+  },
+  "Comercial / Anúncio": {
+    label: "Comercial / Anúncio (Ads)",
+    durations: [
+      "15 Segundos (Spot Rápido)",
+      "30 Segundos (TV Standard)",
+      "60 Segundos (Institucional)"
+    ]
+  },
+  "Podcast / Audiocast": {
+    label: "Podcast / Narrativa de Áudio",
+    durations: [
+      "~5 Minutos (Daily/News)",
+      "~15 Minutos (Episódio Curto)",
+      "~30 Minutos (Episódio Padrão)",
+      "~60 Minutos (Entrevista/Deep Dive)"
+    ]
+  },
+  "Tutorial Educativo": {
+    label: "Tutorial / Aula Educativa",
+    durations: [
+      "~3 Minutos (Dica Rápida)",
+      "~5 Minutos (Passo a Passo)",
+      "~10 Minutos (Aula Completa)"
+    ]
+  },
+  "Outro": {
+    label: "Outro Formato (Personalizado)",
+    durations: [
+      "~1 Minuto",
+      "~3 Minutos",
+      "~5 Minutos",
+      "~10 Minutos"
+    ]
+  }
+};
 
 const TONE_SUGGESTIONS = [
   "Informativo & Sério", "Casual & Divertido", "Dramático & Emocional",
@@ -92,10 +144,13 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
 
   // Step 1: Inputs
   const [premise, setPremise] = useState('');
+  
+  // Use defined keys for genre
   const [genre, setGenre] = useState('Vídeo para YouTube');
+  const [duration, setDuration] = useState(FORMAT_DEFINITIONS['Vídeo para YouTube'].durations[1]); // Default to 5 mins
+
   const [tone, setTone] = useState('Informativo & Sério');
   const [targetAudience, setTargetAudience] = useState('Público Geral');
-  const [duration, setDuration] = useState('5 minutes');
   const [temperature, setTemperature] = useState(0.7);
 
   // Helper States for UI
@@ -119,6 +174,15 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
         // Optionally try to auto-detect things if we wanted, but for now just fill premise
     }
   }, [initialData]);
+
+  // Handle Genre Change to auto-update duration options
+  const handleGenreChange = (newGenre: string) => {
+      setGenre(newGenre);
+      // Automatically reset duration to the first option of the new genre to avoid mismatches
+      if (FORMAT_DEFINITIONS[newGenre]) {
+          setDuration(FORMAT_DEFINITIONS[newGenre].durations[0]);
+      }
+  };
 
   // Determine active provider based on settings
   const getActiveProvider = () => {
@@ -198,26 +262,31 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
   };
 
   // --- API ABSTRACTION LAYER ---
-  const callAI = async (systemPrompt: string, userPrompt: string, outputTokens: number, temp: number): Promise<string> => {
+  const callAI = async (systemPrompt: string, userPrompt: string, outputTokens: number, temp: number, jsonMode: boolean = true): Promise<string> => {
       
       if (activeProvider === 'openai' && integrations?.openai_key) {
           // OPENAI FETCH CALL
+          const body: any = {
+              model: 'gpt-4o', // Or gpt-4-turbo
+              messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt }
+              ],
+              max_tokens: outputTokens,
+              temperature: temp,
+          };
+
+          if (jsonMode) {
+            body.response_format = { type: "json_object" };
+          }
+
           const res = await fetch('https://api.openai.com/v1/chat/completions', {
               method: 'POST',
               headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${integrations.openai_key}`
               },
-              body: JSON.stringify({
-                  model: 'gpt-4o', // Or gpt-4-turbo
-                  messages: [
-                      { role: 'system', content: systemPrompt },
-                      { role: 'user', content: userPrompt }
-                  ],
-                  max_tokens: outputTokens,
-                  temperature: temp,
-                  response_format: { type: "json_object" } // Force JSON mode
-              })
+              body: JSON.stringify(body)
           });
 
           if (!res.ok) {
@@ -230,24 +299,71 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
 
       } else {
           // GEMINI SDK CALL (Default)
-          // Prioritize integration key, fallback to prop key (from global settings)
           const keyToUse = integrations?.gemini_key || apiKey;
 
           if (!keyToUse) throw new Error("API Key do Gemini não encontrada.");
 
-          const response = await generateContentWithRetry({
-            apiKey: keyToUse,
-            model: "gemini-2.5-flash",
-            contents: [{ parts: [{ text: userPrompt }] }],
-            config: {
-                systemInstruction: systemPrompt,
-                responseMimeType: "application/json",
+          const config: any = {
                 temperature: temp,
-                maxOutputTokens: outputTokens
+                maxOutputTokens: outputTokens,
+                // Using BLOCK_NONE to minimize refusals for creative writing tasks
+                safetySettings: [
+                  { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                  { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ]
+          };
+
+          let finalUserPrompt = userPrompt;
+
+          // For plain text mode (Refine), merge system prompt into user prompt to avoid strict system instruction filtering
+          if (!jsonMode && systemPrompt && systemPrompt.trim().length > 0) {
+              finalUserPrompt = `${systemPrompt}\n\n${userPrompt}`;
+          } else if (systemPrompt && systemPrompt.trim().length > 0) {
+              // For JSON mode (Complex tasks), use the system instruction field
+              config.systemInstruction = systemPrompt;
+          }
+
+          // Force JSON if requested
+          if (jsonMode) {
+              config.responseMimeType = "application/json";
+          } else {
+              delete config.responseMimeType;
+          }
+
+          try {
+            const response = await generateContentWithRetry({
+                apiKey: keyToUse,
+                model: "gemini-2.5-flash",
+                contents: [{ parts: [{ text: finalUserPrompt }] }],
+                config: config
+            });
+            
+            let text = response.text;
+
+            // Fallback extraction
+            if (!text && response.candidates && response.candidates.length > 0) {
+                const candidate = response.candidates[0];
+                const parts = candidate.content?.parts;
+                if (parts && parts.length > 0 && parts[0].text) {
+                    text = parts[0].text;
+                }
             }
-          });
-          
-          return response.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            
+            if (!text) {
+                console.warn("Gemini Response Empty. Full Response:", JSON.stringify(response));
+                // Check for safety finish reason
+                if (response.candidates?.[0]?.finishReason === 'SAFETY') {
+                    throw new Error("A IA bloqueou a resposta por motivos de segurança (Safety Filter). Tente suavizar o conteúdo.");
+                }
+            }
+
+            return text || '';
+          } catch (e: any) {
+             console.error("Gemini API Call Failed:", e);
+             throw e;
+          }
       }
   };
 
@@ -271,29 +387,35 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
     setIsRefiningPremise(true);
     setError(null);
     try {
-        const systemInstruction = "Você é um consultor de roteiros especialista em Loglines. Responda APENAS com um objeto JSON contendo a premissa refinada.";
-        const prompt = `Analise a seguinte ideia bruta e reescreva-a como uma Premissa/Logline profissional, clara e instigante. Mantenha o mesmo sentido original, mas melhore a escrita.
+        const systemPrompt = "You are a world-class Script Doctor and YouTube Strategist. Your goal is to refine raw video ideas into engaging, viral-worthy premises."; 
         
-        Ideia Original: "${premise}"
+        // Detailed prompt to ensure quality and format
+        const prompt = `
+        Refine the following video premise to make it clearer, more engaging, and professional.
         
-        Saída JSON Esperada:
-        { "refined": "Texto da premissa refinada aqui" }`;
+        Original Premise: "${premise}"
+        
+        Instructions:
+        1. Keep the core idea but improve the wording.
+        2. Make it sound exciting (a good "hook").
+        3. Keep it concise (maximum 3-4 sentences).
+        4. Output MUST be in Brazilian Portuguese.
+        5. Output ONLY the refined text, no intros or explanations.
+        `;
 
-        const jsonText = await callAI(systemInstruction, prompt, 500, 0.7);
-        if (jsonText) {
-            const parsed = cleanAndParseJSON(jsonText);
-            // Flexible parsing: check multiple potential keys or raw string
-            const refinedContent = parsed.refined || parsed.premise || parsed.logline || parsed.text;
-            
-            if (refinedContent && typeof refinedContent === 'string') {
-                setPremise(refinedContent);
-            } else if (typeof parsed === 'string') {
-                setPremise(parsed); // Fallback if model returned plain string despite instruction
-            }
+        // Pass false for jsonMode to get plain text
+        const refinedText = await callAI(systemPrompt, prompt, 2000, 0.9, false);
+        
+        if (refinedText && refinedText.trim()) {
+            // Remove potential surrounding quotes from the model
+            const cleanText = refinedText.trim().replace(/^"|"$/g, '');
+            setPremise(cleanText);
+        } else {
+             throw new Error("A IA não retornou texto (Resposta vazia). Tente simplificar ou usar outra chave.");
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error("Refine Premise Error:", error);
-        setError("Não foi possível refinar a premissa. Tente novamente.");
+        setError(error.message || "Não foi possível refinar a premissa. Tente novamente.");
     } finally {
         setIsRefiningPremise(false);
     }
@@ -324,7 +446,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
       const prompt = `
         Analise a seguinte premissa e crie a estrutura narrativa.
         Premissa: "${premise}"
-        Gênero: ${genre}
+        Formato/Gênero: ${genre}
         Tom: ${tone}
         Público: ${targetAudience}
         Duração Alvo: ${duration}
@@ -537,7 +659,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
     <div className="flex h-full bg-slate-50">
       
       {/* Workflow Sidebar */}
-      <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col gap-8 hidden md:flex">
+      <div className="w-64 bg-white border-r border-slate-200 p-6 flex flex-col gap-8 hidden lg:flex">
          <div>
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-1">
                 <BrainCircuit className="w-5 h-5 text-indigo-600" />
@@ -613,7 +735,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50">
-         <div className="max-w-4xl mx-auto">
+         <div className="max-w-4xl mx-auto pb-10">
             
             {/* STEP 1: INPUTS */}
             {step === 1 && (
@@ -623,7 +745,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         <p className="text-slate-500">O Agente Arquiteto ({activeProvider === 'openai' ? 'via GPT-4' : 'via Gemini'}) irá estruturar sua narrativa.</p>
                     </div>
 
-                    <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 space-y-6">
+                    <div className="bg-white rounded-2xl p-6 lg:p-8 shadow-sm border border-slate-200 space-y-6">
                         <div>
                             <label className="block text-sm font-bold text-slate-700 mb-2">Premissa / Ideia Central</label>
                             <div className="relative">
@@ -647,17 +769,18 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="relative">
                                 <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
+                                    <Film className="w-4 h-4 text-indigo-500" />
                                     Formato / Gênero
-                                    <button onClick={() => setActiveHelp(activeHelp === 'genre' ? null : 'genre')} className="text-slate-400 hover:text-indigo-500"><HelpCircle className="w-3.5 h-3.5" /></button>
                                 </label>
-                                {activeHelp === 'genre' && <HelpTooltip type="Gênero" options={GENRE_SUGGESTIONS} onSelect={setGenre} />}
-                                <input
-                                    type="text"
+                                <select
                                     value={genre}
-                                    onChange={(e) => setGenre(e.target.value)}
+                                    onChange={(e) => handleGenreChange(e.target.value)}
                                     className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
-                                    placeholder="Ex: Documentário, Podcast..."
-                                />
+                                >
+                                    {Object.keys(FORMAT_DEFINITIONS).map(key => (
+                                        <option key={key} value={key}>{FORMAT_DEFINITIONS[key].label}</option>
+                                    ))}
+                                </select>
                             </div>
                             <div className="relative">
                                 <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
@@ -724,11 +847,9 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                                     onChange={(e) => setDuration(e.target.value)}
                                     className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
-                                    <option value="2 minutes">~2 Minutos (Curto)</option>
-                                    <option value="5 minutes">~5 Minutos (Padrão)</option>
-                                    <option value="10 minutes">~10 Minutos (Detalhado)</option>
-                                    <option value="20 minutes">~20 Minutos (Aprofundado)</option>
-                                    <option value="40 minutes">~40 Minutos (Documentário)</option>
+                                    {FORMAT_DEFINITIONS[genre]?.durations.map((dur) => (
+                                        <option key={dur} value={dur}>{dur}</option>
+                                    ))}
                                 </select>
                             </div>
                         </div>
@@ -754,11 +875,11 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         </div>
                     </div>
 
-                    <div className="flex justify-end">
+                    <div className="flex justify-end pb-8 lg:pb-0">
                         <button
                             onClick={handleGenerateStructure}
                             disabled={isProcessing || !premise.trim()}
-                            className={`px-8 py-4 rounded-xl font-bold shadow-lg flex items-center gap-3 transition-all ${
+                            className={`w-full sm:w-auto px-8 py-4 rounded-xl font-bold shadow-lg flex items-center justify-center gap-3 transition-all ${
                                 isProcessing 
                                 ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                                 : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200 transform hover:-translate-y-1'
@@ -783,7 +904,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
             {/* STEP 2: STRUCTURE REVIEW */}
             {step === 2 && structure && (
                 <div className="space-y-8 animate-in fade-in slide-in-from-right-4 relative">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                         <div>
                             <h2 className="text-2xl font-bold text-slate-800">Estrutura Aprovada?</h2>
                             <p className="text-slate-500">Revise e edite o plano criado pelo Arquiteto antes de escrever.</p>
@@ -802,9 +923,9 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                              </span>
                         </div>
                         
-                        <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-8">
+                        <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
                             {/* Characters Col */}
-                            <div className="md:col-span-1 space-y-4">
+                            <div className="lg:col-span-1 space-y-4">
                                 <h4 className="font-bold text-slate-400 uppercase text-xs tracking-wider flex items-center gap-2">
                                     <Users className="w-4 h-4" />
                                     Personagens (Editável)
@@ -836,7 +957,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                             </div>
 
                             {/* Outline Col */}
-                            <div className="md:col-span-2 space-y-4">
+                            <div className="lg:col-span-2 space-y-4">
                                 <h4 className="font-bold text-slate-400 uppercase text-xs tracking-wider flex items-center gap-2">
                                     <ListOrdered className="w-4 h-4" />
                                     Beat Sheet (Editável)
@@ -872,11 +993,11 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         </div>
                     </div>
 
-                    <div className="flex justify-end gap-4">
+                    <div className="flex flex-col sm:flex-row justify-end gap-4 pb-8 lg:pb-0">
                         <button
                             onClick={() => setIsRefining(true)}
                             disabled={isProcessing}
-                            className={`px-6 py-4 rounded-xl font-bold border-2 border-slate-200 text-slate-600 hover:border-indigo-500 hover:text-indigo-600 flex items-center gap-2 transition-all ${
+                            className={`px-6 py-4 rounded-xl font-bold border-2 border-slate-200 text-slate-600 hover:border-indigo-500 hover:text-indigo-600 flex items-center justify-center gap-2 transition-all ${
                                 isProcessing ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                         >
@@ -887,7 +1008,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         <button
                             onClick={handleWriteScript}
                             disabled={isProcessing}
-                            className={`px-8 py-4 rounded-xl font-bold shadow-lg flex items-center gap-3 transition-all ${
+                            className={`px-8 py-4 rounded-xl font-bold shadow-lg flex items-center justify-center gap-3 transition-all ${
                                 isProcessing 
                                 ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                                 : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200 transform hover:-translate-y-1'
@@ -909,7 +1030,7 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
 
                     {/* REFINEMENT MODAL */}
                     {isRefining && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in">
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in p-4">
                             <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 p-6 animate-in zoom-in-95 relative">
                                 <button 
                                     onClick={() => setIsRefining(false)}
@@ -974,11 +1095,11 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
                         ))}
                     </div>
 
-                    <div className="sticky bottom-6 flex justify-center gap-4">
+                    <div className="sticky bottom-6 flex flex-col sm:flex-row justify-center gap-4 px-4 sm:px-0">
                          <button
                             onClick={handleExpandScript}
                             disabled={isExpanding}
-                            className={`bg-white hover:bg-indigo-50 text-indigo-700 border-2 border-indigo-100 px-8 py-4 rounded-full font-bold shadow-lg transition-all flex items-center gap-3 ${
+                            className={`bg-white hover:bg-indigo-50 text-indigo-700 border-2 border-indigo-100 px-8 py-4 rounded-full font-bold shadow-lg transition-all flex items-center justify-center gap-3 ${
                                 isExpanding ? 'opacity-70 cursor-not-allowed' : ''
                             }`}
                             title="Adicionar mais conteúdo ao final do roteiro mantendo o contexto."
@@ -993,10 +1114,11 @@ export default function ScriptCreator({ onExportScript, apiKey, integrations, in
 
                          <button
                             onClick={() => onExportScript(generatedBlocks)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-10 py-4 rounded-full font-bold shadow-xl shadow-emerald-200/50 transform transition-all hover:scale-105 flex items-center gap-3"
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-10 py-4 rounded-full font-bold shadow-xl shadow-emerald-200/50 transform transition-all hover:scale-105 flex items-center justify-center gap-3"
                          >
                              <Sparkles className="w-5 h-5" />
-                             Enviar para Estúdio de Voz
+                             <span className="hidden sm:inline">Enviar para Estúdio de Voz</span>
+                             <span className="sm:hidden">Enviar para Estúdio</span>
                              <ArrowRight className="w-5 h-5" />
                          </button>
                     </div>

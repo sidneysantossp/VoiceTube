@@ -55,7 +55,9 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'audio/wav' });
+        // Use the mimeType from the recorder or fallback
+        const mimeType = mediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(chunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         setAudioBlob(blob);
         setAudioUrl(url);
@@ -226,7 +228,9 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
                setTimeout(() => {
                    if (testAudioRef.current) {
                        testAudioRef.current.src = url;
-                       testAudioRef.current.play();
+                       testAudioRef.current.play().catch(err => {
+                         console.error("Autoplay failed:", err);
+                       });
                        setIsPlayingTest(true);
                    }
                }, 100);
@@ -250,12 +254,14 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
           if (!user) throw new Error("Usuário não autenticado.");
 
           // 2. Upload to Supabase Storage
-          const fileName = `${user.id}/${Date.now()}_${createdVoice.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.wav`;
+          // Determine extension from MIME type if possible
+          const ext = audioBlob.type.includes('webm') ? 'webm' : audioBlob.type.includes('mp4') ? 'mp4' : 'wav';
+          const fileName = `${user.id}/${Date.now()}_${createdVoice.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.${ext}`;
           
           const { data: uploadData, error: uploadError } = await supabase.storage
               .from('voice-samples')
               .upload(fileName, audioBlob, {
-                  contentType: 'audio/wav',
+                  contentType: audioBlob.type || 'audio/wav',
                   upsert: true
               });
 
@@ -309,7 +315,7 @@ export default function VoiceCloning({ onSaveVoice, apiKey }: VoiceCloningProps)
           if (isPlayingTest) {
               testAudioRef.current.pause();
           } else {
-              testAudioRef.current.play();
+              testAudioRef.current.play().catch(e => console.error("Play error", e));
           }
           setIsPlayingTest(!isPlayingTest);
       }

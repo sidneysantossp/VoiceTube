@@ -58,6 +58,23 @@ export interface SystemSetting {
   description: string;
 }
 
+// NEW: Module Management
+export interface PlatformModules {
+  tts: boolean;
+  cloning: boolean;
+  editor: boolean;
+  script_creator: boolean;
+  title_creator: boolean;
+}
+
+export const DEFAULT_MODULES: PlatformModules = {
+  tts: true,
+  cloning: true,
+  editor: true,
+  script_creator: true,
+  title_creator: true
+};
+
 export interface UserIntegrations {
   gemini_key: string;
   openai_key: string;
@@ -105,6 +122,12 @@ export const INITIAL_VOICES: VoiceOption[] = [
     id: 'Aoede',
     name: 'Aoede',
     description: 'Confiante e profissional, ideal para negócios.',
+    gender: 'Female'
+  },
+  {
+    id: 'Leda',
+    name: 'Leda',
+    description: 'Expressiva e calorosa, ótima para narrativas envolventes.',
     gender: 'Female'
   }
 ];

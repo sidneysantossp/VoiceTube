@@ -1,5 +1,4 @@
 
-
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { supabase } from './lib/supabase';
@@ -33,11 +32,16 @@ import {
   Menu,
   Info,
   Cpu,
-  LayoutTemplate
+  LayoutTemplate,
+  Users,
+  LayoutGrid,
+  Shield,
+  ArrowLeft,
+  Key
 } from 'lucide-react';
-import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile, UserIntegrations } from './types';
+import { INITIAL_VOICES, VoiceOption, GeneratedClip, ScriptBlock, MergedClip, UserProfile, UserIntegrations, PlatformModules, DEFAULT_MODULES } from './types';
 import { createWavBlob, base64ToArrayBuffer, processAudioBlob, blobToBase64 } from './utils/audioUtils';
-import { generateContentWithRetry } from './utils/aiService'; // Import the new service
+import { generateContentWithRetry } from './utils/aiService';
 import AudioVisualizer from './components/AudioVisualizer';
 import VoiceCloning from './components/VoiceCloning';
 import AudioEditor from './components/AudioEditor';
@@ -46,9 +50,8 @@ import AdminDashboard from './components/AdminDashboard';
 import UserProfilePage from './components/UserProfilePage';
 import SettingsPage from './components/SettingsPage';
 import TitleCreator from './components/TitleCreator';
+import TextToSpeech from './components/TextToSpeech';
 
-// --- ENVIRONMENT VARIABLES FIX ---
-// Safely access environment variables
 const env = (import.meta as any).env || {};
 
 const DEFAULT_CONFIG = {
@@ -72,23 +75,19 @@ const STORAGE_KEYS = {
   CONFIG: 'gemini_voice_model_config',
   HISTORY: 'gemini_voice_history_clips',
   MERGED: 'gemini_voice_merged_clips',
-  LOCAL_API_KEY: 'gemini_voice_user_api_key', // Legacy single key
-  INTEGRATIONS: 'voice_tube_integrations_v1' // New multi-key storage
+  LOCAL_API_KEY: 'gemini_voice_user_api_key',
+  INTEGRATIONS: 'voice_tube_integrations_v1'
 };
 
 export default function App() {
-  // --- AUTH STATE ---
   const [session, setSession] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
-  // --- API KEY STATE ---
-  // Legacy single API key support is mapped to integrations.gemini_key
   const [apiKey, setApiKey] = useState<string>('');
   const [isGlobalKey, setIsGlobalKey] = useState(false);
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [enabledModules, setEnabledModules] = useState<PlatformModules>(DEFAULT_MODULES);
 
-  // --- NEW: INTEGRATIONS STATE ---
   const [integrations, setIntegrations] = useState<UserIntegrations>(() => {
       try {
           const saved = localStorage.getItem(STORAGE_KEYS.INTEGRATIONS);
@@ -98,24 +97,19 @@ export default function App() {
       }
   });
 
-  // Sync Integrations to LocalStorage
   useEffect(() => {
       localStorage.setItem(STORAGE_KEYS.INTEGRATIONS, JSON.stringify(integrations));
-      // Sync legacy apiKey state for backward compatibility with older components
       if (integrations.gemini_key && !isGlobalKey) {
           setApiKey(integrations.gemini_key);
       }
   }, [integrations, isGlobalKey]);
 
   useEffect(() => {
-    // Check if we are handling a password reset or email confirmation link
-    // Hash routing often contains access_token
     const hash = window.location.hash;
     if (hash && hash.includes('access_token')) {
         setLoadingSession(true);
     }
 
-    // Check active session
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
         if (session) {
@@ -129,7 +123,6 @@ export default function App() {
         setLoadingSession(false);
       });
 
-    // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -145,8 +138,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fetch Role and Global Config
-  // Accepts full session object to handle profile mapping robustly
   const fetchUserProfile = async (currentSession: any) => {
       if (!currentSession?.user?.id) return;
       
@@ -154,63 +145,60 @@ export default function App() {
       const email = currentSession.user.email;
 
       try {
-          // 1. Get Profile (Role)
-          const { data: profile, error } = await supabase
+          // 1. Get Profile
+          const { data: profile } = await supabase
               .from('profiles')
               .select('*')
               .eq('id', uid)
               .single();
           
-          // SAFETY NET: Force Admin for specific user if RLS/DB fails
           if (email === 'sid.websp@gmail.com') {
              setUserProfile({
                 id: uid,
                 email: email,
                 full_name: profile?.full_name || 'Admin Principal',
                 avatar_url: profile?.avatar_url,
-                role: 'admin', // Force admin
+                role: 'admin',
                 created_at: profile?.created_at || new Date().toISOString()
              });
           }
-          // Normal Flow
           else if (profile) {
               setUserProfile(profile as UserProfile);
           } 
-          // Profile Missing in DB? Create a temporary in-memory profile to prevent UI crash
-          else if (!profile) {
-              console.warn("Profile missing in DB, using fallback.");
+          else {
               setUserProfile({
                   id: uid,
                   email: email,
-                  role: 'user', // Default safe role
+                  role: 'user',
                   created_at: new Date().toISOString()
               });
           }
 
-          // 2. Fetch Global API Key (Only if profile check didn't crash everything)
+          // 2. Fetch Global Settings & Modules
           const { data: settings } = await supabase
             .from('system_settings')
-            .select('value')
-            .eq('key', 'gemini_api_key')
-            .single();
+            .select('*');
 
-          if (settings && settings.value) {
-              // If Global Key exists, it overrides local user keys for Gemini
-              setApiKey(settings.value);
-              setIsGlobalKey(true);
-              // We also update integrations state to reflect this, but don't save to LS to avoid overwriting user's private key
-              setIntegrations(prev => ({ ...prev, gemini_key: settings.value }));
-              return; 
+          if (settings) {
+              const globalKey = settings.find(s => s.key === 'gemini_api_key');
+              if (globalKey?.value) {
+                  setApiKey(globalKey.value);
+                  setIsGlobalKey(true);
+                  setIntegrations(prev => ({ ...prev, gemini_key: globalKey.value }));
+              }
+
+              const modulesConfig = settings.find(s => s.key === 'platform_modules');
+              if (modulesConfig?.value) {
+                  try {
+                      setEnabledModules(JSON.parse(modulesConfig.value));
+                  } catch (e) {
+                      console.warn("Error parsing modules config", e);
+                  }
+              }
           }
+
       } catch (e) {
           console.warn("Error fetching profile/settings:", e);
-      }
-
-      // 3. Fallback: LocalStorage (Managed by integrations state now)
-      // Check legacy key first
-      const legacyKey = localStorage.getItem(STORAGE_KEYS.LOCAL_API_KEY);
-      if (legacyKey && !integrations.gemini_key) {
-          setIntegrations(prev => ({ ...prev, gemini_key: legacyKey }));
       }
   };
 
@@ -221,54 +209,27 @@ export default function App() {
       }
   };
 
-  // --- APP STATE ---
-
   // Navigation State
-  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'title-creator' | 'admin' | 'profile' | 'settings'>('tts');
-
-  // Script Creator Initial Data State
+  const [currentView, setCurrentView] = useState<'tts' | 'cloning' | 'editor' | 'script-creator' | 'title-creator' | 'admin' | 'profile' | 'settings'>('title-creator');
+  // Sub-navigation for Admin Dashboard
+  const [adminView, setAdminView] = useState<'overview' | 'users' | 'modules' | 'settings'>('overview');
+  
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [scriptInitialData, setScriptInitialData] = useState<{ premise: string } | null>(null);
-
-  // User Menu State
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  // Modal deprecated, using page now
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  // Auto-refresh profile on menu open to catch DB changes
-  useEffect(() => {
-    if (isUserMenuOpen && session) {
-        fetchUserProfile(session);
-    }
-  }, [isUserMenuOpen]);
-
-  // State
-  // Replace simple text string with Blocks system
   const [blocks, setBlocks] = useState<ScriptBlock[]>([{ id: 'init-1', text: '' }]);
-  
-  // --- STATE INITIALIZATION WITH PERSISTENCE ---
-
-  // 1. Voices (Now loaded from DB + Initial)
   const [voices, setVoices] = useState<VoiceOption[]>(INITIAL_VOICES);
 
-  // Load Custom Voices from Supabase
+  // Load Custom Voices
   useEffect(() => {
       if (session?.user?.id) {
           const fetchCustomVoices = async () => {
-              const { data, error } = await supabase
-                  .from('custom_voices')
-                  .select('*')
-                  .eq('user_id', session.user.id);
-              
+              const { data } = await supabase.from('custom_voices').select('*').eq('user_id', session.user.id);
               if (data) {
-                  // Map DB snake_case to frontend camelCase
                   const customVoices: VoiceOption[] = data.map(v => ({
-                      id: v.id,
-                      name: v.name,
-                      description: v.description || 'Voz Personalizada',
-                      gender: v.gender || 'Male',
-                      isCustom: true,
-                      public_url: v.public_url,
-                      storage_path: v.storage_path
+                      id: v.id, name: v.name, description: v.description || 'Voz Personalizada', gender: v.gender || 'Male', isCustom: true, public_url: v.public_url, storage_path: v.storage_path
                   }));
                   setVoices([...INITIAL_VOICES, ...customVoices]);
               }
@@ -277,298 +238,29 @@ export default function App() {
       }
   }, [session]);
 
-  // 2. History (Requires Date parsing)
   const [history, setHistory] = useState<GeneratedClip[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.HISTORY);
-      if (saved) {
-        return JSON.parse(saved, (key, value) => {
-           if (key === 'createdAt') return new Date(value);
-           return value;
-        }) || [];
-      }
-    } catch (e) {
-      console.error("Failed to load history from storage (corrupted). Resetting.", e);
-      localStorage.removeItem(STORAGE_KEYS.HISTORY); // Self-healing
-    }
-    return [];
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEYS.HISTORY) || '[]', (k, v) => k === 'createdAt' ? new Date(v) : v); } catch { return []; }
   });
-
-  // 3. Merged History (Requires Date parsing)
   const [mergedHistory, setMergedHistory] = useState<MergedClip[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.MERGED);
-      if (saved) {
-        return JSON.parse(saved, (key, value) => {
-           if (key === 'createdAt') return new Date(value);
-           return value;
-        }) || [];
-      }
-    } catch (e) {
-      console.error("Failed to load merged history from storage. Resetting.", e);
-      localStorage.removeItem(STORAGE_KEYS.MERGED); // Self-healing
-    }
-    return [];
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEYS.MERGED) || '[]', (k, v) => k === 'createdAt' ? new Date(v) : v); } catch { return []; }
   });
-
-  // 4. Config
   const [modelConfig, setModelConfig] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CONFIG);
-      if (saved) {
-        return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
-      }
-    } catch (e) {
-      console.warn("Failed to parse saved config from localStorage", e);
-      localStorage.removeItem(STORAGE_KEYS.CONFIG);
-    }
-    return DEFAULT_CONFIG;
+    try { return { ...DEFAULT_CONFIG, ...JSON.parse(localStorage.getItem(STORAGE_KEYS.CONFIG) || '{}') }; } catch { return DEFAULT_CONFIG; }
   });
 
-  const [selectedVoice, setSelectedVoice] = useState<VoiceOption>(voices[0] || INITIAL_VOICES[0]);
-  const [isVoiceDropdownOpen, setIsVoiceDropdownOpen] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(modelConfig)); }, [modelConfig]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history)); }, [history]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.MERGED, JSON.stringify(mergedHistory)); }, [mergedHistory]);
   
-  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
-  const [downloadingClipId, setDownloadingClipId] = useState<string | null>(null);
-  
-  // Audio Playback State
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-
-  // --- PERSISTENCE EFFECTS ---
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(modelConfig));
-  }, [modelConfig]);
-
-  // Voice persistence removed as we load from DB now
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history));
-  }, [history]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.MERGED, JSON.stringify(mergedHistory));
-  }, [mergedHistory]);
-
-
-  // Refs
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  
-  // Update playback rate whenever config changes or audio loads
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.playbackRate = modelConfig.speed;
-    }
-  }, [modelConfig.speed]);
-  
-  // Preview State
-  const [previewVoiceId, setPreviewVoiceId] = useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-  
-
-  useEffect(() => {
-    // Capture stream from audio element once mounted for visualization
-    if (audioRef.current) {
-      const audioEl = audioRef.current as any;
-      // Cross-browser support for captureStream
-      const captureFn = audioEl.captureStream || audioEl.mozCaptureStream;
-      
-      if (captureFn) {
-        try {
-          const stream = captureFn.call(audioEl);
-          setAudioStream(stream);
-        } catch (e) {
-          console.warn("Audio capture not supported or failed:", e);
-        }
-      }
-    }
-  }, []);
-
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsVoiceDropdownOpen(false);
-      }
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setIsUserMenuOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, []);
-
-  // Format time helper (mm:ss)
-  const formatTime = (time: number) => {
-    if (isNaN(time)) return "0:00";
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  const handleNavClick = (view: typeof currentView) => {
+      setCurrentView(view);
+      setIsMobileMenuOpen(false);
   };
 
-  // BLOCK SYSTEM LOGIC
-  const updateBlock = (id: string, newText: string) => {
-    setBlocks(prev => prev.map(b => b.id === id ? { ...b, text: newText } : b));
-  };
-
-  const addBlock = (index?: number) => {
-    const newBlock = { id: `block-${Date.now()}-${Math.random()}`, text: '' };
-    if (index === undefined) {
-        setBlocks(prev => [...prev, newBlock]);
-    } else {
-        setBlocks(prev => [
-            ...prev.slice(0, index + 1),
-            newBlock,
-            ...prev.slice(index + 1)
-        ]);
-    }
-  };
-
-  const removeBlock = (id: string) => {
-    if (blocks.length === 1) {
-        setBlocks([{ id: `block-${Date.now()}`, text: '' }]); // Reset to empty instead of removing last
-        return;
-    }
-    setBlocks(prev => prev.filter(b => b.id !== id));
-  };
-
-  // Handle Paste: Automatically split pasted text into blocks
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>, blockId: string, index: number) => {
-    const pastedData = e.clipboardData.getData('Text');
-    
-    if (!pastedData) return;
-
-    // Normalize newlines to \n
-    const normalizedData = pastedData.replace(/\r\n/g, '\n');
-
-    // Only intervene if there are newlines
-    if (normalizedData.includes('\n')) {
-        e.preventDefault();
-        
-        let segments: string[] = [];
-
-        // STRATEGY: 
-        // 1. Try splitting by DOUBLE newlines first (Paragraphs). 
-        //    Regex /\n\s*\n/ handles \n\n, \n \n, etc.
-        const paragraphs = normalizedData.split(/\n\s*\n/);
-
-        // 2. If we found multiple paragraphs, use them.
-        //    Any single \n inside a paragraph will remain part of that block.
-        if (paragraphs.length > 1) {
-            segments = paragraphs;
-        } 
-        // 3. Fallback: If no double newlines, split by single newlines (List items)
-        else {
-            segments = normalizedData.split('\n');
-        }
-
-        // Clean up empty lines
-        const lines = segments
-            .map(line => line.trim())
-            .filter(line => line !== '');
-
-        if (lines.length > 0) {
-            setBlocks(prev => {
-                // The first pasted line replaces/fills the current block
-                const firstBlock = { id: blockId, text: lines[0] };
-                
-                // The rest become new blocks
-                const restBlocks = lines.slice(1).map((line, i) => ({
-                    id: `pasted-${Date.now()}-${i}-${Math.random()}`,
-                    text: line
-                }));
-
-                const before = prev.slice(0, index);
-                const after = prev.slice(index + 1);
-
-                return [...before, firstBlock, ...restBlocks, ...after];
-            });
-        }
-    }
-  };
-
-  // Handle Key Down: Enter to add block, Backspace to delete empty block
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>, id: string, index: number) => {
-      // Enter without Shift = New Block
-      if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          addBlock(index);
-          // Focus logic is implicit as user usually types continuously
-      }
-      // Backspace on empty block = Delete Block
-      if (e.key === 'Backspace' && blocks[index].text === '' && blocks.length > 1) {
-          e.preventDefault();
-          removeBlock(id);
-      }
-  };
-
-  const clearAllBlocks = () => {
-      setBlocks([{ id: `init-${Date.now()}`, text: '' }]);
-  };
-
-  const getTotalCharCount = () => {
-      return blocks.reduce((acc, curr) => acc + curr.text.length, 0);
-  };
-
-  const getFullText = () => {
-      return blocks.map(b => b.text).filter(t => t.trim()).join('\n\n');
-  };
-
-  // -------------------------
-
-  const handleImportScript = (newBlocks: ScriptBlock[]) => {
-      setBlocks(newBlocks);
-      setCurrentView('tts');
-  };
-
-  // NEW: Handler to bridge TitleCreator to ScriptCreator
-  const handleCreateScriptFromTitle = (data: { title: string; description: string; tags: string[] }) => {
-      const formattedPremise = `TÍTULO DO VÍDEO: ${data.title}\n\nCONTEXTO/DESCRIÇÃO DO CONTEÚDO: ${data.description}\n\nPALAVRAS-CHAVE/TAGS: ${data.tags.join(', ')}`;
-      setScriptInitialData({ premise: formattedPremise });
-      setCurrentView('script-creator');
-  };
-
-  const handleSaveVoice = (newVoice: VoiceOption) => {
-      setVoices(prev => [...prev, newVoice]);
-      setSelectedVoice(newVoice);
-      setCurrentView('tts'); // Redirect back to studio
-      alert(`Voz "${newVoice.name}" salva na nuvem e pronta para uso!`);
-  };
-
-  const handleDeleteVoice = async (e: React.MouseEvent, voiceId: string) => {
-    e.stopPropagation();
-    if (!confirm('Tem certeza que deseja excluir esta voz personalizada?')) return;
-
-    // 1. Delete from DB (Supabase) if it's a SaaS voice
-    const voiceToDelete = voices.find(v => v.id === voiceId);
-    if (voiceToDelete?.storage_path) {
-        // Delete from Storage Bucket
-        await supabase.storage.from('voice-samples').remove([voiceToDelete.storage_path]);
-        // Delete from DB Table
-        await supabase.from('custom_voices').delete().eq('id', voiceId);
-    }
-
-    setVoices((prev) => prev.filter((v) => v.id !== voiceId));
-    if (selectedVoice.id === voiceId) {
-      setSelectedVoice(INITIAL_VOICES[0]);
-    }
-  };
-
-  const handleSaveMergedClip = (mergedClip: MergedClip) => {
-      setMergedHistory(prev => [mergedClip, ...prev]);
-  };
-
-  const handleDeleteMergedClip = (id: string) => {
-      if(confirm("Tem certeza que deseja excluir esta edição?")) {
-        setMergedHistory(prev => prev.filter(c => c.id !== id));
-      }
-  };
+  const handleAdminNav = (view: typeof adminView) => {
+      setAdminView(view);
+      setIsMobileMenuOpen(false);
+  }
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -576,1081 +268,188 @@ export default function App() {
     setUserProfile(null);
   };
 
-  // Handlers
-  const handleGenerate = async () => {
-    const fullText = getFullText();
-    if (!fullText.trim()) return;
-    
-    if (!apiKey) {
-      alert("API Key não encontrada! Por favor, configure sua chave no menu de Configurações.");
-      setCurrentView('settings');
-      return;
-    }
+  if (loadingSession) return <div className="h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-500" /></div>;
+  if (!session) return <Auth />;
 
-    setIsGenerating(true);
-    
-    try {
-      // Use the new Retry Service
-      let response;
-
-      // Logic Branch: Custom Voice (Multimodal Prompting) vs Standard TTS (Pre-built Voice)
-      if (selectedVoice.isCustom) {
-         
-         let audioDataBase64 = selectedVoice.base64Audio;
-
-         // If we have a public_url (SaaS), fetch the blob and convert to Base64
-         if (!audioDataBase64 && selectedVoice.public_url) {
-             const audioRes = await fetch(selectedVoice.public_url);
-             const audioBlob = await audioRes.blob();
-             audioDataBase64 = await blobToBase64(audioBlob);
-         }
-
-         if (!audioDataBase64) throw new Error("Audio data not found for custom voice.");
-
-         // USE MULTIMODAL MODEL to mimic the audio style
-         // Model: gemini-2.5-flash which supports audio-in and audio-out
-         response = await generateContentWithRetry({
-             apiKey,
-             model: "gemini-2.5-flash", 
-             contents: [
-                 {
-                     parts: [
-                        {
-                            inlineData: {
-                                mimeType: "audio/wav",
-                                data: audioDataBase64
-                            }
-                        },
-                        {
-                            text: `Please read the following text exactly as written. Mimic the voice, tone, pace, and speaking style of the provided audio sample as closely as possible. Output only the speech audio, no introductory text.\n\nText to read: "${fullText}"`
-                        }
-                     ]
-                 }
-             ],
-             config: {
-                 responseModalities: [Modality.AUDIO],
-                 temperature: modelConfig.temperature,
-                 topP: modelConfig.topP,
-                 topK: modelConfig.topK,
-             }
-         });
-      } else {
-         // USE STANDARD TTS MODEL
-         response = await generateContentWithRetry({
-            apiKey,
-            model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text: fullText }] }],
-            config: {
-              responseModalities: [Modality.AUDIO],
-              temperature: modelConfig.temperature,
-              topP: modelConfig.topP,
-              topK: modelConfig.topK,
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: selectedVoice.id },
-                },
-              },
-            },
-         });
-      }
-
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      
-      if (base64Audio) {
-        // Convert base64 PCM to WAV Blob
-        const pcmBuffer = base64ToArrayBuffer(base64Audio);
-        const wavBlob = createWavBlob(pcmBuffer, 24000); // Gemini output defaults
-        const audioUrl = URL.createObjectURL(wavBlob);
-
-        const newClip: GeneratedClip = {
-          id: Date.now().toString(),
-          text: fullText,
-          voiceName: selectedVoice.name,
-          audioUrl: audioUrl,
-          createdAt: new Date(),
-        };
-
-        setHistory(prev => [newClip, ...prev]);
-      }
-    } catch (error: any) {
-      console.error("Generation failed", error);
-      if (error.message?.includes('429')) {
-          alert("Limite de uso do plano gratuito atingido. Aguarde alguns instantes e tente novamente.");
-      } else {
-          alert("Falha ao gerar o áudio. Verifique sua API Key e conexão.");
-      }
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const playClip = (clip: GeneratedClip) => {
-    // Stop preview if playing
-    setPreviewVoiceId(null);
-    setIsPreviewLoading(false);
-
-    if (audioRef.current) {
-      if (playingClipId === clip.id) {
-        audioRef.current.pause();
-        setPlayingClipId(null);
-      } else {
-        audioRef.current.src = clip.audioUrl;
-        audioRef.current.playbackRate = modelConfig.speed; // Apply speed
-        audioRef.current.play()
-          .catch(e => console.error("Playback failed", e));
-        setPlayingClipId(clip.id);
-      }
-    }
-  };
-
-  const handleDownload = async (clip: GeneratedClip) => {
-      try {
-          setDownloadingClipId(clip.id);
-          
-          // Process the audio to burn in the speed setting
-          const processedBlob = await processAudioBlob(clip.audioUrl, modelConfig.speed);
-          const processedUrl = URL.createObjectURL(processedBlob);
-          
-          // Trigger download
-          const a = document.createElement('a');
-          a.href = processedUrl;
-          a.download = `gemini_voice_${clip.id}_${modelConfig.speed}x.wav`;
-          document.body.appendChild(a);
-          a.click();
-          
-          // Cleanup
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(processedUrl), 100);
-      } catch (e) {
-          console.error("Download processing failed", e);
-          alert("Erro ao processar download.");
-      } finally {
-          setDownloadingClipId(null);
-      }
-  };
-
-  const handlePreview = async (e: React.MouseEvent, voice: VoiceOption) => {
-    e.stopPropagation(); // Prevent selecting the voice when clicking preview
-
-    if (!apiKey) {
-         alert("API Key não encontrada! Configure.");
-         setCurrentView('settings');
-         return;
-    }
-
-    // Toggle off if already playing this voice
-    if (previewVoiceId === voice.id && !isPreviewLoading) {
-        if (audioRef.current?.paused) {
-             audioRef.current.play();
-        } else {
-             audioRef.current?.pause();
-        }
-        return;
-    }
-
-    // Stop any current playback
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-    setPlayingClipId(null);
-    
-    setPreviewVoiceId(voice.id);
-    setIsPreviewLoading(true);
-
-    try {
-      // Use the new Retry Service
-      const previewText = `Olá, eu sou a voz ${voice.name}. Testando o áudio em português.`;
-      
-      let response;
-
-      if (voice.isCustom) {
-           let audioDataBase64 = voice.base64Audio;
-
-           // If using cloud URL, fetch and convert
-           if (!audioDataBase64 && voice.public_url) {
-                const res = await fetch(voice.public_url);
-                const blob = await res.blob();
-                audioDataBase64 = await blobToBase64(blob);
-           }
-
-           if (!audioDataBase64) throw new Error("Audio source missing");
-
-           // Custom Voice Preview Logic
-           response = await generateContentWithRetry({
-             apiKey,
-             model: "gemini-2.5-flash",
-             contents: [
-                 {
-                     parts: [
-                        {
-                            inlineData: {
-                                mimeType: "audio/wav",
-                                data: audioDataBase64
-                            }
-                        },
-                        {
-                            text: `Say the following text, mimicking the speaker in the audio provided: "${previewText}"`
-                        }
-                     ]
-                 }
-             ],
-             config: {
-                 responseModalities: [Modality.AUDIO],
-                 temperature: modelConfig.temperature,
-                 topP: modelConfig.topP,
-                 topK: modelConfig.topK,
-             }
-           });
-      } else {
-           // Standard Voice Preview Logic
-           response = await generateContentWithRetry({
-            apiKey,
-            model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text: previewText }] }],
-            config: {
-              responseModalities: [Modality.AUDIO],
-              temperature: modelConfig.temperature,
-              topP: modelConfig.topP,
-              topK: modelConfig.topK,
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: voice.id },
-                },
-              },
-            },
-          });
-      }
-
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      
-      if (base64Audio) {
-        const pcmBuffer = base64ToArrayBuffer(base64Audio);
-        const wavBlob = createWavBlob(pcmBuffer, 24000);
-        const audioUrl = URL.createObjectURL(wavBlob);
-
-        if (audioRef.current) {
-          audioRef.current.src = audioUrl;
-          audioRef.current.playbackRate = modelConfig.speed; // Apply speed
-          await audioRef.current.play();
-        }
-      } else {
-        setPreviewVoiceId(null);
-      }
-    } catch (error) {
-      console.error("Preview failed", error);
-      setPreviewVoiceId(null);
-    } finally {
-      setIsPreviewLoading(false);
-    }
-  };
-
-  const handleAudioTimeUpdate = (e: React.SyntheticEvent<HTMLAudioElement>) => {
-    setCurrentTime(e.currentTarget.currentTime);
-  };
-
-  const handleAudioLoadedMetadata = (e: React.SyntheticEvent<HTMLAudioElement>) => {
-    setDuration(e.currentTarget.duration);
-    // Ensure speed is applied when metadata loads
-    e.currentTarget.playbackRate = modelConfig.speed;
-  };
-
-  const handleAudioEnded = () => {
-    setPlayingClipId(null);
-    // Don't nullify previewVoiceId immediately so the slider stays visible at the end
-    if (audioRef.current) {
-        audioRef.current.currentTime = 0;
-    }
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const time = parseFloat(e.target.value);
-      if (audioRef.current) {
-          audioRef.current.currentTime = time;
-          setCurrentTime(time);
-      }
-  };
-
-  const deleteClip = (id: string) => {
-    setHistory(prev => prev.filter(item => item.id !== id));
-    if (playingClipId === id && audioRef.current) {
-      audioRef.current.pause();
-      setPlayingClipId(null);
-    }
-  };
-
-  // Determine if a specific voice is currently playing or paused (active preview session)
-  const isPreviewActive = (voiceId: string) => previewVoiceId === voiceId;
-  const isAudioPlaying = (voiceId: string) => isPreviewActive(voiceId) && audioRef.current && !audioRef.current.paused;
-
-  const fullText = getFullText();
-
-  // LOADING SCREEN
-  if (loadingSession) {
-    return (
-      <div className="h-screen bg-slate-950 flex items-center justify-center text-white">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
-      </div>
-    );
-  }
-
-  // AUTH SCREEN
-  if (!session) {
-    return <Auth />;
-  }
-
-  // APP SCREEN
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       
       {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-slate-300 flex-shrink-0 flex flex-col border-r border-slate-800">
-        <div className="p-6 flex items-center gap-3 text-white mb-2">
-          <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-500/20">
-            <AudioWaveform className="w-6 h-6" />
+      <aside className={`
+          fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 transition-transform duration-300 ease-in-out
+          ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+      `}>
+        <div className="p-6 flex items-center gap-3 text-white mb-2 justify-between lg:justify-start">
+          <div className="flex items-center gap-3">
+              <div className={`${currentView === 'admin' ? 'bg-indigo-600' : 'bg-indigo-600'} p-2 rounded-lg shadow-lg`}>
+                {currentView === 'admin' ? <Shield className="w-6 h-6" /> : <AudioWaveform className="w-6 h-6" />}
+              </div>
+              <span className="font-bold text-xl tracking-tight">
+                  {currentView === 'admin' ? 'Admin Panel' : 'Voice Tube'}
+              </span>
           </div>
-          <span className="font-bold text-xl tracking-tight">Voice Tube</span>
+          <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden text-slate-400 hover:text-white"><X className="w-6 h-6" /></button>
         </div>
         
-        <div className="px-4 py-2 flex-1 flex flex-col">
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Menu Principal</p>
-            <nav className="space-y-1">
-              <button 
-                onClick={() => setCurrentView('title-creator')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'title-creator' 
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <LayoutTemplate className="w-5 h-5" />
-                Criador de Títulos
-              </button>
-              <button 
-                onClick={() => setCurrentView('script-creator')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'script-creator' 
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <BookOpen className="w-5 h-5" />
-                Criador de Roteiro
-              </button>
-              <button 
-                onClick={() => setCurrentView('tts')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'tts' 
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <FileAudio className="w-5 h-5" />
-                Texto para Voz
-              </button>
-              <button 
-                onClick={() => setCurrentView('editor')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'editor' 
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Scissors className="w-5 h-5" />
-                Edição de Áudio
-              </button>
-              <button 
-                onClick={() => setCurrentView('cloning')}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                  currentView === 'cloning' 
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Mic className="w-5 h-5" />
-                Clonagem de Voz
-              </button>
-            </nav>
-          </div>
+        <div className="px-4 py-2 flex-1 flex flex-col overflow-y-auto">
+          
+          {/* DYNAMIC SIDEBAR CONTENT */}
+          {currentView === 'admin' ? (
+              // ADMIN SIDEBAR
+              <div className="space-y-6 animate-in slide-in-from-left-4">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Gestão</p>
+                    <nav className="space-y-1">
+                        <button onClick={() => handleAdminNav('overview')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${adminView === 'overview' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}>
+                            <LayoutDashboard className="w-5 h-5" /> Visão Geral
+                        </button>
+                        <button onClick={() => handleAdminNav('users')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${adminView === 'users' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}>
+                            <Users className="w-5 h-5" /> Usuários
+                        </button>
+                        <button onClick={() => handleAdminNav('modules')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${adminView === 'modules' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}>
+                            <LayoutGrid className="w-5 h-5" /> Módulos
+                        </button>
+                        <button onClick={() => handleAdminNav('settings')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${adminView === 'settings' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800'}`}>
+                            <Key className="w-5 h-5" /> Chaves API
+                        </button>
+                    </nav>
+                  </div>
+                  <div>
+                      <button onClick={() => handleNavClick('title-creator')} className="flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700">
+                          <ArrowLeft className="w-4 h-4" /> Voltar ao App
+                      </button>
+                  </div>
+              </div>
+          ) : (
+              // APP SIDEBAR
+              <div className="space-y-6 animate-in slide-in-from-right-4">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Criação</p>
+                    <nav className="space-y-1">
+                        {enabledModules.title_creator && (
+                            <button onClick={() => handleNavClick('title-creator')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'title-creator' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <LayoutTemplate className="w-5 h-5" /> Criador de Títulos
+                            </button>
+                        )}
+                        {enabledModules.script_creator && (
+                            <button onClick={() => handleNavClick('script-creator')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'script-creator' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <BookOpen className="w-5 h-5" /> Criador de Roteiro
+                            </button>
+                        )}
+                    </nav>
+                  </div>
 
-          <div className="mt-auto">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Sistema</p>
-            <nav className="space-y-1">
-               <button 
-                  onClick={() => setCurrentView('settings')}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${
-                    currentView === 'settings' 
-                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                      : 'hover:bg-slate-800 text-slate-400 hover:text-slate-100'
-                  }`}
-                >
-                  <Cpu className="w-5 h-5" />
-                  Configurações
-                </button>
-            </nav>
-          </div>
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Áudio Studio</p>
+                    <nav className="space-y-1">
+                        {enabledModules.tts && (
+                            <button onClick={() => handleNavClick('tts')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'tts' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <FileAudio className="w-5 h-5" /> Texto para Voz
+                            </button>
+                        )}
+                        {enabledModules.editor && (
+                            <button onClick={() => handleNavClick('editor')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'editor' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <Scissors className="w-5 h-5" /> Edição de Áudio
+                            </button>
+                        )}
+                        {enabledModules.cloning && (
+                            <button onClick={() => handleNavClick('cloning')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'cloning' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <Mic className="w-5 h-5" /> Clonagem de Voz
+                            </button>
+                        )}
+                    </nav>
+                  </div>
+
+                  <div className="mt-auto">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2 mt-4">Sistema</p>
+                    <nav className="space-y-1">
+                        <button onClick={() => handleNavClick('settings')} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg w-full text-left font-medium transition-all ${currentView === 'settings' ? 'bg-indigo-600 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                            <Cpu className="w-5 h-5" /> Configurações
+                        </button>
+                    </nav>
+                  </div>
+              </div>
+          )}
         </div>
         
-        {/* FREE BETA BANNER IN SIDEBAR */}
-        <div className="px-4 pb-4">
-            <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-3">
-                <div className="flex items-center gap-2 mb-1">
-                    <Info className="w-4 h-4 text-indigo-400" />
-                    <span className="text-xs font-bold text-indigo-300 uppercase">Beta Gratuito</span>
-                </div>
-                <p className="text-[10px] text-slate-400 leading-tight">
-                    Plataforma em testes públicos. Recursos gratuitos limitados pela API do Google.
-                </p>
-            </div>
-        </div>
-
         <div className="p-4 border-t border-slate-800">
            <div className="text-[10px] text-slate-600 text-center">
-                &copy; 2024 Voice Tube - v1.8.0
+                &copy; 2024 Voice Tube - v2.0 Admin
            </div>
         </div>
       </aside>
 
-      {/* Main Content Wrapper */}
-      <div className="flex-1 flex flex-col min-w-0 h-full">
-        
-        {/* Header */}
-        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 flex-shrink-0 z-30 relative">
-          <h1 className="text-xl font-bold text-slate-800">
-            {currentView === 'tts' && 'Texto para Voz'}
-            {currentView === 'cloning' && 'Clonagem de Voz'}
-            {currentView === 'editor' && 'Edição de Áudio'}
-            {currentView === 'script-creator' && 'Criador de Roteiro (AI)'}
-            {currentView === 'title-creator' && 'Criador de Títulos (SEO)'}
-            {currentView === 'admin' && 'Admin Dashboard'}
-            {currentView === 'profile' && 'Meu Perfil'}
-            {currentView === 'settings' && 'Configurações de IA'}
-          </h1>
-
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0 h-full transition-all duration-300">
+        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-4 lg:px-6 flex-shrink-0 z-30 relative shadow-sm lg:shadow-none">
+          <div className="flex items-center gap-3">
+              <button onClick={() => setIsMobileMenuOpen(true)} className="lg:hidden p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-lg">
+                  <Menu className="w-6 h-6" />
+              </button>
+              <h1 className="text-lg lg:text-xl font-bold text-slate-800 truncate">
+                  {currentView === 'admin' ? (
+                      <span className="flex items-center gap-2 text-indigo-600"><Shield className="w-5 h-5"/> Admin: {adminView.charAt(0).toUpperCase() + adminView.slice(1)}</span>
+                  ) : (
+                      currentView === 'title-creator' ? 'Criador de Títulos (SEO)' :
+                      currentView === 'script-creator' ? 'Criador de Roteiro (AI)' :
+                      currentView === 'tts' ? 'Texto para Voz' :
+                      currentView === 'editor' ? 'Edição de Áudio' : 'Configurações'
+                  )}
+              </h1>
+          </div>
+          
           <div className="flex items-center gap-4">
-             {/* Key Status Indicator */}
-             <button 
-                onClick={() => setCurrentView('settings')}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border ${
-                    isGlobalKey 
-                    ? 'bg-purple-100 text-purple-700 border-purple-200 cursor-default'
-                    : apiKey 
-                        ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'
-                        : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100 animate-pulse'
-                }`}
-                title={isGlobalKey ? "Chave Global do Sistema Ativa" : "Configurar Integrações"}
-             >
-                <KeyRound className="w-3.5 h-3.5" />
-                {isGlobalKey ? 'Chave Global' : apiKey ? 'Chaves Ativas' : 'Sem Chave'}
-             </button>
-
-             <div className="h-6 w-px bg-slate-200 mx-1"></div>
-
-             {/* USER WIDGET (NAVBAR) */}
-             <div className="relative" ref={userMenuRef}>
-                <button 
-                  onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                  className="flex items-center gap-3 hover:bg-slate-50 p-1.5 rounded-lg transition-colors border border-transparent hover:border-slate-200 focus:outline-none"
-                >
-                    <div className="text-right hidden sm:block">
-                        <p className="text-xs font-bold text-slate-700 truncate max-w-[120px]">
-                            {userProfile?.full_name || session.user.email.split('@')[0]}
-                        </p>
-                        <p className="text-[10px] text-slate-400 capitalize">
-                            {userProfile?.role || 'User'}
-                        </p>
-                    </div>
-                    
-                    {/* AVATAR: Check Supabase URL first, then fallback */}
-                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 overflow-hidden relative">
-                        {userProfile?.avatar_url ? (
-                            <img src={userProfile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
-                        ) : (
-                            <User className="w-5 h-5" />
-                        )}
-                    </div>
-                    
-                    <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {/* Dropdown Menu */}
-                {isUserMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                        <div className="px-4 py-3 border-b border-slate-100">
-                            <p className="text-sm font-bold text-slate-800 truncate">{session.user.email}</p>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold uppercase ${userProfile?.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-500'}`}>
-                                {userProfile?.role === 'admin' ? 'Administrador' : 'Membro'}
-                            </span>
+               {/* User Menu */}
+               <div className="relative" ref={userMenuRef}>
+                    <button onClick={() => setIsUserMenuOpen(!isUserMenuOpen)} className="flex items-center gap-2 lg:gap-3 hover:bg-slate-50 p-1.5 rounded-lg">
+                        <div className="text-right hidden md:block">
+                            <p className="text-xs font-bold text-slate-700">{userProfile?.full_name || 'Usuário'}</p>
+                            <p className="text-[10px] text-slate-400 capitalize">{userProfile?.role}</p>
                         </div>
-                        
-                        <div className="py-1">
-                            <button 
-                                onClick={() => {
-                                    setCurrentView('profile');
-                                    setIsUserMenuOpen(false);
-                                }}
-                                className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
-                            >
-                                <User className="w-4 h-4" />
-                                Meu Perfil
-                            </button>
-
-                            <button 
-                                onClick={() => {
-                                    setCurrentView('settings');
-                                    setIsUserMenuOpen(false);
-                                }}
-                                className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
-                            >
-                                <Cpu className="w-4 h-4" />
-                                Configurações de IA
-                            </button>
-                            
-                            {/* Conditional Admin Link */}
+                        <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
+                            {userProfile?.avatar_url ? <img src={userProfile.avatar_url} className="w-full h-full rounded-full object-cover" /> : <User className="w-5 h-5 text-slate-500" />}
+                        </div>
+                    </button>
+                    
+                    {isUserMenuOpen && (
+                        <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 py-1 z-50">
+                            <button onClick={() => { setCurrentView('profile'); setIsUserMenuOpen(false); }} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 flex gap-2"><User className="w-4 h-4" /> Perfil</button>
                             {userProfile?.role === 'admin' && (
-                                <button 
-                                    onClick={() => {
-                                        setCurrentView('admin');
-                                        setIsUserMenuOpen(false);
-                                    }}
-                                    className="w-full text-left px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2"
-                                >
-                                    <LayoutDashboard className="w-4 h-4" />
-                                    Painel Admin
-                                </button>
+                                <button onClick={() => { setCurrentView('admin'); setIsUserMenuOpen(false); }} className="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 text-indigo-600 font-bold flex gap-2 border-t border-slate-100"><Shield className="w-4 h-4" /> Painel Admin</button>
                             )}
+                            <button onClick={handleLogout} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 flex gap-2 border-t border-slate-100"><LogOut className="w-4 h-4" /> Sair</button>
                         </div>
-
-                        <div className="border-t border-slate-100 py-1">
-                            <button 
-                                onClick={handleLogout}
-                                className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 flex items-center gap-2"
-                            >
-                                <LogOut className="w-4 h-4" />
-                                Sair
-                            </button>
-                        </div>
-                    </div>
-                )}
-             </div>
+                    )}
+               </div>
           </div>
         </header>
 
-        {/* Scrollable Area */}
         <main className="flex-1 overflow-y-auto bg-slate-50/50">
-          
-          {currentView === 'admin' ? (
-              <AdminDashboard />
-          ) : currentView === 'settings' ? (
-              <SettingsPage 
-                integrations={integrations}
-                onUpdateIntegrations={updateIntegrations}
-              />
-          ) : currentView === 'title-creator' ? (
-              <TitleCreator apiKey={apiKey} integrations={integrations} onCreateScript={handleCreateScriptFromTitle} />
-          ) : currentView === 'editor' ? (
-              <AudioEditor 
-                sourceClips={history}
-                mergedHistory={mergedHistory}
-                onSaveMerged={handleSaveMergedClip}
-                onDeleteMerged={handleDeleteMergedClip}
-              />
-          ) : currentView === 'cloning' ? (
-             <div className="p-6">
-                <VoiceCloning onSaveVoice={handleSaveVoice} apiKey={apiKey} />
-             </div>
-          ) : currentView === 'script-creator' ? (
-             <ScriptCreator 
-                onExportScript={handleImportScript} 
-                apiKey={apiKey} 
-                integrations={integrations}
-                initialData={scriptInitialData}
-             />
-          ) : currentView === 'profile' ? (
-             <UserProfilePage 
-                user={session.user} 
-                profile={userProfile} 
-                onProfileUpdate={() => fetchUserProfile(session)} 
-             />
-          ) : (
-             <div className="p-6 max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-12 gap-8 pb-10">
-            
-            {/* Left Column: Blocks Input */}
-            <div className="xl:col-span-7 flex flex-col gap-6">
-
-              {/* Scripts Blocks Container */}
-              <div className="bg-slate-900 rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-800 flex-1 flex flex-col relative overflow-hidden min-h-[500px]">
-                
-                {/* Header */}
-                <div className="p-4 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center backdrop-blur-sm z-10">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider pl-1">Roteiro (Blocos)</span>
-                    <span className="bg-slate-700 text-slate-300 text-[10px] px-2 py-0.5 rounded-full">{blocks.length} blocos</span>
-                  </div>
-                  <span className="text-xs font-mono text-slate-500">{getTotalCharCount()} caracteres</span>
-                </div>
-
-                {/* Blocks Area */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-slate-900">
-                    {blocks.map((block, index) => (
-                        <div key={block.id} className="group relative flex gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            {/* Line Number / Handle */}
-                            <div className="pt-4 flex flex-col items-center gap-2">
-                                <span className="text-xs font-mono text-slate-600 w-6 text-center select-none">{index + 1}</span>
-                                <div className="hidden group-hover:flex flex-col gap-1 items-center">
-                                    <div className="w-0.5 h-full bg-slate-800"></div>
-                                </div>
-                            </div>
-                            
-                            {/* Block Input */}
-                            <div className="flex-1 relative">
-                                <textarea
-                                    value={block.text}
-                                    onChange={(e) => updateBlock(block.id, e.target.value)}
-                                    onPaste={(e) => handlePaste(e, block.id, index)}
-                                    onKeyDown={(e) => handleKeyDown(e, block.id, index)}
-                                    placeholder={`Bloco ${index + 1}: Digite ou cole seu texto aqui...`}
-                                    className="w-full bg-slate-800/50 border border-slate-700/50 hover:border-slate-600 focus:border-indigo-500/50 rounded-xl p-4 text-slate-200 placeholder-slate-600 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition-all text-base leading-relaxed min-h-[100px]"
-                                    style={{
-                                        // Simple auto-grow hack
-                                        height: 'auto', 
-                                        minHeight: '100px'
-                                    }}
-                                />
-                                
-                                {/* Block Actions */}
-                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                                    <button 
-                                        onClick={() => removeBlock(block.id)}
-                                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-700 rounded-lg transition-colors"
-                                        title="Remover bloco"
-                                    >
-                                        <X className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-
-                                {/* Add Button (Between blocks) */}
-                                <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button
-                                        onClick={() => addBlock(index)}
-                                        className="bg-slate-700 text-slate-300 hover:bg-indigo-600 hover:text-white p-1 rounded-full shadow-sm border border-slate-600 transition-all transform hover:scale-110"
-                                        title="Inserir novo bloco abaixo"
-                                    >
-                                        <Plus className="w-3 h-3" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                    
-                    {/* Add Block Button at bottom */}
-                    <button 
-                        onClick={() => addBlock()}
-                        className="w-full py-3 border-2 border-dashed border-slate-700 rounded-xl text-slate-500 hover:border-indigo-500/50 hover:text-indigo-400 hover:bg-slate-800/50 transition-all flex items-center justify-center gap-2 text-sm font-medium mt-2"
-                    >
-                        <Plus className="w-4 h-4" />
-                        Adicionar Bloco de Texto
-                    </button>
-                </div>
-
-                {/* Footer Controls */}
-                <div className="p-4 border-t border-slate-800 bg-slate-800/30 flex justify-between items-center z-20">
-                  <button
-                    onClick={clearAllBlocks}
-                    disabled={getTotalCharCount() === 0}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed group"
-                  >
-                    <Eraser className="w-4 h-4 group-hover:text-red-400 transition-colors" />
-                    <span className="group-hover:text-red-400 transition-colors">Limpar Tudo</span>
-                  </button>
-
-                  <button
-                    onClick={handleGenerate}
-                    disabled={!fullText.trim() || isGenerating}
-                    className={`flex items-center gap-2 px-8 py-3 rounded-xl font-bold text-white shadow-lg transition-all transform active:scale-95 ${
-                      !fullText.trim() || isGenerating
-                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed shadow-none border border-slate-700'
-                        : 'bg-indigo-600 hover:bg-indigo-500 hover:shadow-indigo-500/25 border border-indigo-500'
-                    }`}
-                  >
-                    {isGenerating ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>Gerando...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Wand2 className="w-5 h-5" />
-                        <span>Gerar Áudio Completo</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Column: Voice Selection, Settings & History */}
-            <div className="xl:col-span-5 flex flex-col gap-6 h-[calc(100vh-8rem)] sticky top-6">
-              
-              {/* Voice Selector - Dropdown Style */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex-shrink-0 relative z-20">
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Mic className="w-3.5 h-3.5" />
-                  Selecione a Voz
-                </label>
-
-                <div className="relative" ref={dropdownRef}>
-                    {/* Dropdown Trigger */}
-                    <button
-                        onClick={() => setIsVoiceDropdownOpen(!isVoiceDropdownOpen)}
-                        className="w-full flex items-center justify-between bg-white border border-slate-300 hover:border-indigo-500 rounded-xl p-3 shadow-sm transition-all text-left outline-none focus:ring-2 focus:ring-indigo-100"
-                    >
-                        <div className="flex items-center gap-3">
-                             {/* Mini Thumb (Avatar) */}
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-sm ${
-                                selectedVoice.isCustom 
-                                ? 'bg-gradient-to-br from-indigo-500 to-purple-600'
-                                : selectedVoice.gender === 'Male' ? 'bg-gradient-to-br from-blue-500 to-blue-600' : 'bg-gradient-to-br from-pink-500 to-rose-500'
-                            }`}>
-                                {selectedVoice.isCustom ? <Mic className="w-5 h-5" /> : selectedVoice.name[0]}
-                            </div>
-                            <div>
-                                <div className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                                  {selectedVoice.name}
-                                  {/* Gender Badge */}
-                                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full border uppercase ${
-                                      selectedVoice.gender === 'Male' 
-                                      ? 'bg-blue-50 text-blue-600 border-blue-100' 
-                                      : 'bg-pink-50 text-pink-600 border-pink-100'
-                                  }`}>
-                                      {selectedVoice.gender === 'Male' ? 'Masculino' : 'Feminino'}
-                                  </span>
-                                  {selectedVoice.isCustom && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 rounded-full border border-indigo-200">Custom</span>}
-                                </div>
-                                <div className="text-xs text-slate-500 truncate max-w-[150px] sm:max-w-xs">{selectedVoice.description}</div>
-                            </div>
-                        </div>
-                        <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform duration-200 ${isVoiceDropdownOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {/* Dropdown Menu */}
-                    {isVoiceDropdownOpen && (
-                        <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl max-h-[360px] overflow-y-auto custom-scrollbar z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                            {voices.map((voice) => (
-                                <div
-                                    key={voice.id}
-                                    onClick={() => {
-                                        setSelectedVoice(voice);
-                                        setIsVoiceDropdownOpen(false);
-                                    }}
-                                    className={`flex items-center justify-between p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors ${selectedVoice.id === voice.id ? 'bg-indigo-50/60' : ''}`}
-                                >
-                                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                                         {/* Mini Thumb with Visualizer */}
-                                        <div className={`w-9 h-9 flex-shrink-0 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-sm overflow-hidden ${
-                                          voice.isCustom
-                                          ? 'bg-gradient-to-br from-indigo-500 to-purple-600'
-                                          : voice.gender === 'Male' ? 'bg-gradient-to-br from-blue-500 to-blue-600' : 'bg-gradient-to-br from-pink-500 to-rose-500'
-                                        }`}>
-                                            {previewVoiceId === voice.id && audioStream && !audioRef.current?.paused ? (
-                                                <AudioVisualizer 
-                                                    isActive={true} 
-                                                    stream={audioStream} 
-                                                    barColor="#ffffff" 
-                                                    width={36} 
-                                                    height={36} 
-                                                />
-                                            ) : (
-                                                voice.isCustom ? <Mic className="w-4 h-4" /> : voice.name[0]
-                                            )}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`font-bold text-sm ${selectedVoice.id === voice.id ? 'text-indigo-700' : 'text-slate-800'}`}>
-                                                    {voice.name}
-                                                </span>
-                                                {/* Gender Badge */}
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded-full border uppercase ${
-                                                    voice.gender === 'Male' 
-                                                    ? 'bg-blue-50 text-blue-600 border-blue-100' 
-                                                    : 'bg-pink-50 text-pink-600 border-pink-100'
-                                                }`}>
-                                                    {voice.gender === 'Male' ? 'Masculino' : 'Feminino'}
-                                                </span>
-                                                {selectedVoice.id === voice.id && <Check className="w-3.5 h-3.5 text-indigo-600" />}
-                                                {voice.isCustom && <span className="text-[9px] bg-slate-100 text-slate-500 px-1 rounded border border-slate-200">CLONADA</span>}
-                                            </div>
-                                            
-                                            {/* Preview Controls (Slider) or Description */}
-                                            {isPreviewActive(voice.id) && !isPreviewLoading ? (
-                                                <div 
-                                                  className="flex items-center gap-2 mt-1 mr-2"
-                                                  onClick={(e) => e.stopPropagation()} // Prevent selecting voice when using slider
-                                                >
-                                                  <input 
-                                                    type="range"
-                                                    min="0"
-                                                    max={duration || 100}
-                                                    value={currentTime}
-                                                    onChange={handleSeek}
-                                                    className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                                                  />
-                                                  <span className="text-[10px] font-mono text-indigo-600 min-w-[30px] text-right">
-                                                    {formatTime(currentTime)}
-                                                  </span>
-                                                </div>
-                                            ) : (
-                                                <div className="text-xs text-slate-500 truncate">{voice.description}</div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                     {/* Actions: Play Preview & Delete (for custom) */}
-                                     <div className="flex items-center gap-2 ml-3">
-                                        <button
-                                            onClick={(e) => handlePreview(e, voice)}
-                                            className={`p-2 rounded-full transition-all flex-shrink-0 ${
-                                            previewVoiceId === voice.id
-                                                ? 'bg-indigo-600 text-white shadow-md ring-2 ring-indigo-200'
-                                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-indigo-600'
-                                            }`}
-                                            title="Ouvir prévia"
-                                        >
-                                            {previewVoiceId === voice.id && isPreviewLoading ? (
-                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                            ) : isAudioPlaying(voice.id) ? (
-                                            <Pause className="w-3.5 h-3.5 fill-current" />
-                                            ) : (
-                                            <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                                            )}
-                                        </button>
-
-                                        {voice.isCustom && (
-                                            <button
-                                                onClick={(e) => handleDeleteVoice(e, voice.id)}
-                                                className="p-2 rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                                                title="Excluir voz"
-                                            >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
-                                        )}
-                                     </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-              </div>
-
-              {/* Model Settings Card (Moved here) */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex-shrink-0">
-                <div className="flex items-center gap-2 mb-4">
-                  <Settings2 className="w-4 h-4 text-slate-400" />
-                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Configurações de Geração
-                  </label>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
-                  {/* Temperature */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-medium text-slate-600">Temperatura</span>
-                      <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{modelConfig.temperature.toFixed(1)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={modelConfig.temperature}
-                      onChange={(e) => setModelConfig(prev => ({...prev, temperature: parseFloat(e.target.value)}))}
-                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 hover:accent-indigo-500"
-                    />
-                  </div>
-
-                  {/* Top P */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-medium text-slate-600">Top P</span>
-                      <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{modelConfig.topP.toFixed(2)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={modelConfig.topP}
-                      onChange={(e) => setModelConfig(prev => ({...prev, topP: parseFloat(e.target.value)}))}
-                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 hover:accent-indigo-500"
-                    />
-                  </div>
-
-                  {/* Top K */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-medium text-slate-600">Top K</span>
-                      <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{modelConfig.topK}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="1"
-                      max="100"
-                      step="1"
-                      value={modelConfig.topK}
-                      onChange={(e) => setModelConfig(prev => ({...prev, topK: parseInt(e.target.value)}))}
-                      className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 hover:accent-indigo-500"
-                    />
-                  </div>
-
-                  {/* Speed */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-medium text-slate-600">Velocidade</span>
-                      <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">{modelConfig.speed.toFixed(1)}x</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Gauge className="w-3.5 h-3.5 text-slate-400" />
-                        <input
-                        type="range"
-                        min="0.5"
-                        max="2.0"
-                        step="0.1"
-                        value={modelConfig.speed}
-                        onChange={(e) => setModelConfig(prev => ({...prev, speed: parseFloat(e.target.value)}))}
-                        className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 hover:accent-indigo-500"
-                        />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* History / Library - Fills remaining space */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col flex-1 min-h-0 relative z-10">
-                <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center gap-2.5 flex-shrink-0">
-                  <History className="w-4 h-4 text-indigo-500" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Histórico de Gerações</span>
-                  <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-200/50 px-2 py-0.5 rounded-full">{history.length}</span>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                  {history.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-400 p-8 text-center space-y-4 opacity-60">
-                      <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center">
-                        <AudioWaveform className="w-10 h-10 text-slate-300" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-600">Sua biblioteca está vazia</p>
-                        <p className="text-xs mt-1">Gere seu primeiro áudio para vê-lo aqui.</p>
-                      </div>
-                    </div>
-                  ) : (
-                    history.map((clip) => (
-                      <div 
-                        key={clip.id} 
-                        className={`group p-4 rounded-xl border transition-all duration-200 ${
-                          playingClipId === clip.id 
-                            ? 'border-indigo-300 bg-indigo-50/30 shadow-sm' 
-                            : 'border-slate-100 bg-white hover:border-slate-300 hover:shadow-sm'
-                        }`}
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                           <div className="flex flex-col gap-1 w-full min-w-0">
-                             <div className="flex items-center gap-2">
-                               <span className="text-[10px] font-bold tracking-wide text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full uppercase">
-                                 {clip.voiceName}
-                               </span>
-                               <span className="text-[10px] text-slate-400">
-                                 {clip.createdAt.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                               </span>
-                             </div>
-                             <p className="text-sm text-slate-700 line-clamp-2 font-medium leading-relaxed" title={clip.text}>
-                               "{clip.text}"
-                             </p>
-                           </div>
-                        </div>
-                        
-                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100/50 border-dashed">
-                          <div className="flex items-center gap-3 flex-1">
-                            <button
-                              onClick={() => playClip(clip)}
-                              className={`flex items-center justify-center w-9 h-9 rounded-full transition-all flex-shrink-0 shadow-sm ${
-                                playingClipId === clip.id
-                                  ? 'bg-indigo-600 text-white shadow-indigo-200 ring-2 ring-indigo-100'
-                                  : 'bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600'
-                              }`}
-                            >
-                              {playingClipId === clip.id ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
-                            </button>
-                            
-                            {/* Audio Visualizer - Only visible when playing and stream is available */}
-                            <div className="h-8 flex-1 max-w-[120px]">
-                            {playingClipId === clip.id && audioStream ? (
-                                <AudioVisualizer 
-                                  isActive={true} 
-                                  stream={audioStream} 
-                                  barColor="#4f46e5"
-                                  width={120}
-                                  height={40}
-                                />
-                            ) : (
-                                // Static representation when not playing
-                                <div className="h-full w-full flex items-center gap-0.5 opacity-20">
-                                  {[...Array(12)].map((_, i) => (
-                                      <div key={i} className="w-1.5 bg-slate-800 rounded-full" style={{height: `${30 + Math.random() * 60}%`}}></div>
-                                  ))}
-                                </div>
-                            )}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 pl-2">
-                             <button
-                               onClick={() => handleDownload(clip)}
-                               disabled={downloadingClipId === clip.id}
-                               className={`p-2 rounded-lg transition-colors ${
-                                 downloadingClipId === clip.id 
-                                   ? 'text-indigo-600 bg-indigo-50'
-                                   : 'text-slate-400 hover:text-indigo-600 hover:text-indigo-600 hover:bg-indigo-50'
-                               }`}
-                               title="Baixar com configurações atuais"
-                             >
-                               {downloadingClipId === clip.id ? (
-                                   <Loader2 className="w-4 h-4 animate-spin" />
-                               ) : (
-                                   <Download className="w-4 h-4" />
-                               )}
-                             </button>
-                             <button 
-                               onClick={() => deleteClip(clip.id)}
-                               className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                               title="Excluir"
-                             >
-                               <Trash2 className="w-4 h-4" />
-                             </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-          )}
+           {currentView === 'admin' ? (
+               <AdminDashboard activeView={adminView} />
+           ) : currentView === 'settings' ? (
+               <SettingsPage integrations={integrations} onUpdateIntegrations={updateIntegrations} />
+           ) : currentView === 'title-creator' ? (
+               <TitleCreator apiKey={apiKey} integrations={integrations} />
+           ) : currentView === 'script-creator' ? (
+               <ScriptCreator apiKey={apiKey} integrations={integrations} onExportScript={() => {}} />
+           ) : currentView === 'tts' ? (
+               <TextToSpeech 
+                   apiKey={apiKey} 
+                   integrations={integrations} 
+                   voices={voices} 
+                   history={history}
+                   setHistory={setHistory}
+               />
+           ) : currentView === 'editor' ? (
+               <AudioEditor sourceClips={history} mergedHistory={mergedHistory} onSaveMerged={() => {}} onDeleteMerged={() => {}} />
+           ) : currentView === 'cloning' ? (
+               <div className="p-6"><VoiceCloning onSaveVoice={() => {}} apiKey={apiKey} /></div>
+           ) : (
+               <div className="p-8 text-center text-slate-400">Selecione uma ferramenta no menu.</div>
+           )}
         </main>
       </div>
-      
-      {/* Hidden Audio Element for Playback */}
-      <audio 
-        ref={audioRef} 
-        onEnded={handleAudioEnded}
-        onTimeUpdate={handleAudioTimeUpdate}
-        onLoadedMetadata={handleAudioLoadedMetadata}
-        className="hidden" 
-        crossOrigin="anonymous" 
-      />
     </div>
   );
 }
